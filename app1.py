@@ -72,7 +72,6 @@ HOME_HTML = """
         <h1>EAT MAP</h1>
         <p class="subtitle">姫路のぴったりなお店を見つけよう</p>
 
-        <!-- クイック検索エリア -->
         <label>⚡ ワンタップで探す</label>
         <div class="quick-grid">
             <div class="quick-btn" onclick="quickSearch('カフェ', '姫路駅')"><span class="quick-icon">☕</span>カフェ</div>
@@ -81,7 +80,8 @@ HOME_HTML = """
             <div class="quick-btn" onclick="quickSearch('焼肉', '姫路市')"><span class="quick-icon">🍖</span>焼肉</div>
         </div>
 
-        <form action="/search" method="post" id="main-form">
+        <!-- 通信方式を安全な GET に変更しました -->
+        <form action="/search" method="GET" id="main-form">
             <div class="form-group">
                 <label>🔍 こだわり検索</label>
                 <input type="text" name="keyword" id="keyword-input" placeholder="例：スイーツ、デート、夜景">
@@ -127,13 +127,20 @@ RESULT_HTML = """
         .map-container { height: 220px; width: 100%; border-radius: 12px; margin-bottom: 20px; z-index: 1; border: 2px solid #e8e0d9;}
         .sort-box { text-align: right; margin-bottom: 15px; }
         .sort-select { padding: 6px 10px; border-radius: 8px; border: 1px solid #d48a6e; color: #d48a6e; background: white; outline: none; font-size: 12px; font-weight:bold;}
+        .condition-box { background-color: #f2e9e1; padding: 12px; border-radius: 10px; margin-bottom: 20px; font-size: 13px; line-height: 1.5; }
+        .condition-box span { font-weight: bold; color: #d48a6e; }
     </style>
 </head>
 <body>
     <div class="max-w">
         <div class="header">
-            <a href="/" class="nav-btn">← 戻る</a>
+            <a href="/" class="nav-btn">← ホームへ戻る</a>
             <a href="/favorites" class="nav-btn">💖 保存一覧</a>
+        </div>
+
+        <div class="condition-box">
+            探した条件：<br>
+            キーワード「<span>{{ keyword }}</span>」 / エリア: <span>{{ area }}</span>
         </div>
 
         <div style="font-weight:bold; color:#d48a6e; margin-bottom:10px;">📍 見つかったお店マップ</div>
@@ -168,15 +175,12 @@ RESULT_HTML = """
     <script>
         const shops = {{ shops | tojson | safe }};
 
-        // --- Leaflet地図の設定 ---
         if (shops.length > 0) {
-            // 中心点を最初のお店に設定
             const map = L.map('map').setView([shops[0].lat, shops[0].lng], 15);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; OpenStreetMap'
             }).addTo(map);
 
-            // お店ごとにピンを立てる
             shops.forEach(shop => {
                 if(shop.lat && shop.lng) {
                     L.marker([shop.lat, shop.lng]).addTo(map)
@@ -187,7 +191,6 @@ RESULT_HTML = """
             document.getElementById('map').innerHTML = "<div style='text-align:center; padding-top:100px;'>お店が見つかりませんでした</div>";
         }
 
-        // --- 並び替え機能（フロントエンド） ---
         function sortCards() {
             const list = document.getElementById('shop-list');
             const cards = Array.from(list.getElementsByClassName('shop-card'));
@@ -196,13 +199,12 @@ RESULT_HTML = """
             if (sortType === 'cheap') {
                 cards.sort((a, b) => parseInt(a.dataset.budget) - parseInt(b.dataset.budget));
             } else {
-                // デフォルトは元の順序に戻すための簡単なリロード
+                // デフォルト（元の順序）に戻す
                 location.reload();
             }
             cards.forEach(card => list.appendChild(card));
         }
 
-        // --- 保存機能 ---
         function toggleFavorite(btn, shop) {
             let favs = JSON.parse(localStorage.getItem('eatmap_favs') || '[]');
             const index = favs.findIndex(item => item.name === shop.name);
@@ -232,7 +234,6 @@ RESULT_HTML = """
 """
 
 # ----------------- お気に入り画面 -----------------
-# （コード量削減のため、FAVORITES_HTMLはRESULT_HTMLと同じデザイン体系で動的に構築します）
 FAVORITES_HTML = """
 <!DOCTYPE html>
 <html lang="ja">
@@ -247,7 +248,7 @@ FAVORITES_HTML = """
 <body>
     <div class="max-w">
         <div class="header">
-            <a href="/" class="nav-btn">← ホームへ</a>
+            <a href="/" class="nav-btn">← ホームへ戻る</a>
             <h2 style="font-size: 18px; margin: 0; color: #d48a6e;">💖 保存一覧</h2>
         </div>
         <div id="favorites-container"></div>
@@ -284,24 +285,22 @@ FAVORITES_HTML = """
 
 # ----------------- データ取得ロジック -----------------
 def extract_min_budget(budget_str):
-    # 予算文字列から最低金額の数字だけを抽出（ソート用）
     numbers = re.findall(r'\d+', budget_str.replace(',', ''))
     return int(numbers[0]) if numbers else 99999
 
 def fetch_hotpepper_shops(keyword, area):
-    # API未設定時のモックデータ（地図用の緯度経度付き）
     if not HOTPEPPER_API_KEY or HOTPEPPER_API_KEY == "16ba3d78b920bcc":
         return [
             {
                 "name": "姫路 カフェ・ド・シラサギ (仮)", "genre": "カフェ", "catch": "姫路城を望む落ち着いた空間。",
                 "address": "兵庫県姫路市本町68", "access": "JR姫路駅徒歩10分", "budget": "1000円〜2000円", "min_budget": 1000,
-                "lat": 34.836, "lng": 134.693, # 姫路城付近の緯度経度
+                "lat": 34.836, "lng": 134.693,
                 "photo": "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500", "url": "#"
             },
             {
                 "name": "播州 個室居酒屋 姫路丸 (仮)", "genre": "居酒屋", "catch": "新鮮な瀬戸内鮮魚！",
                 "address": "兵庫県姫路市駅前町222", "access": "姫路駅徒歩2分", "budget": "3000円〜4000円", "min_budget": 3000,
-                "lat": 34.827, "lng": 134.690, # 姫路駅付近の緯度経度
+                "lat": 34.827, "lng": 134.690,
                 "photo": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=500", "url": "#"
             }
         ]
@@ -324,8 +323,8 @@ def fetch_hotpepper_shops(keyword, area):
                     "access": s.get("mobile_access", s.get("access", "")),
                     "budget": budget_str,
                     "min_budget": extract_min_budget(budget_str),
-                    "lat": s.get("lat"), # 緯度取得（地図用）
-                    "lng": s.get("lng"), # 経度取得（地図用）
+                    "lat": s.get("lat"),
+                    "lng": s.get("lng"),
                     "photo": s.get("photo", {}).get("pc", {}).get("l", ""),
                     "url": s.get("urls", {}).get("pc", "#")
                 })
@@ -339,18 +338,18 @@ def fetch_hotpepper_shops(keyword, area):
 def home():
     return render_template_string(HOME_HTML)
 
-@app.route('/search', methods=['POST'])
+# ★ここがポイント： GET通信に変更し、エラーを防ぎます
+@app.route('/search', methods=['GET'])
 def search():
-    keyword = request.form.get('keyword', '')
-    area = request.form.get('area', '姫路駅')
+    keyword = request.args.get('keyword', '')
+    area = request.args.get('area', '姫路駅')
     shops = fetch_hotpepper_shops(keyword, area)
-    return render_template_string(RESULT_HTML, is_gacha=False, keyword=keyword, area=area, shops=shops)
+    return render_template_string(RESULT_HTML, keyword=keyword, area=area, shops=shops)
 
 @app.route('/favorites')
 def favorites():
     return render_template_string(FAVORITES_HTML)
 
-# --- PWA用ファイル生成 ---
 @app.route('/manifest.json')
 def manifest():
     return jsonify({
@@ -369,7 +368,6 @@ def manifest():
 
 @app.route('/sw.js')
 def sw():
-    # 空のService Worker（PWAインストールの必須条件を満たすため）
     js_code = "self.addEventListener('fetch', function(event) {});"
     return Response(js_code, mimetype="application/javascript")
 
