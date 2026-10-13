@@ -1,245 +1,304 @@
-import os
 from flask import Flask, request, render_template_string
 
 app = Flask(__name__)
 
-# ==========================================
-# 1. ホーム画面（ポップ＆カフェ風デザイン）
-# ==========================================
+# トップ画面のHTMLテンプレート（カフェ風デザイン）
+HOME_HTML = """
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EAT MAP - 姫路のお店探し</title>
+    <style>
+        body {
+            background-color: #fdfaf6; /* カフェ風の温かみのある背景色 */
+            color: #5a4a42; /* ダークブラウンの文字色 */
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background-color: #ffffff;
+            width: 90%;
+            max-width: 400px;
+            padding: 30px 20px;
+            border-radius: 20px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.05);
+            text-align: center;
+        }
+        h1 {
+            font-size: 28px;
+            font-weight: 800;
+            margin-bottom: 5px;
+            color: #d48a6e; /* アクセントカラーのオレンジブラウン */
+            letter-spacing: 2px;
+        }
+        p.subtitle {
+            font-size: 13px;
+            color: #8c7a6b;
+            margin-bottom: 25px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        label {
+            font-weight: bold;
+            font-size: 14px;
+            display: block;
+            margin-bottom: 8px;
+            color: #5a4a42;
+        }
+        input[type="text"], select {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #e8e0d9;
+            border-radius: 12px;
+            font-size: 15px;
+            background-color: #faf7f2;
+            color: #4a3b32;
+            box-sizing: border-box; /* パディングを含めて幅を100%にする */
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+        input[type="text"]:focus, select:focus {
+            border-color: #d48a6e;
+        }
+        .submit-btn {
+            background-color: #d48a6e;
+            color: white;
+            border: none;
+            padding: 15px 0;
+            width: 100%;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(212, 138, 110, 0.3);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .submit-btn:active {
+            transform: translateY(2px);
+            box-shadow: 0 2px 5px rgba(212, 138, 110, 0.3);
+        }
+        .tags-container {
+            margin-top: 25px;
+            text-align: left;
+        }
+        .tags-title {
+            font-size: 12px;
+            color: #8c7a6b;
+            margin-bottom: 10px;
+        }
+        .tag {
+            display: inline-block;
+            background-color: #f2e9e1;
+            color: #8c7a6b;
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            margin-right: 5px;
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>EAT MAP</h1>
+        <p class="subtitle">姫路のぴったりなお店を見つけよう</p>
+
+        <form action="/search" method="post">
+            <!-- キーワード入力 -->
+            <div class="form-group">
+                <label>🔍 どんなお店を探してる？</label>
+                <input type="text" name="keyword" placeholder="例：静かなカフェ、焼肉、夜景" required>
+            </div>
+
+            <!-- 人数選択（今回追加した部分） -->
+            <div class="form-group">
+                <label>👥 利用人数</label>
+                <select name="people">
+                    <option value="1名">1名（ひとりカフェ・ソロ活）</option>
+                    <option value="2名" selected>2名（デート・友人）</option>
+                    <option value="3〜4名">3〜4名（女子会・グループ）</option>
+                    <option value="5名以上">5名以上（宴会・打ち上げ）</option>
+                </select>
+            </div>
+
+            <button type="submit" class="submit-btn">お店を検索する</button>
+        </form>
+
+        <div class="tags-container">
+            <div class="tags-title">人気のキーワード</div>
+            <span class="tag">#駅チカ</span>
+            <span class="tag">#個室あり</span>
+            <span class="tag">#インスタ映え</span>
+            <span class="tag">#コスパ最強</span>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# 検索結果画面のHTMLテンプレート（ダミーデータ表示）
+RESULT_HTML = """
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>検索結果 - EAT MAP</title>
+    <style>
+        body {
+            background-color: #fdfaf6;
+            color: #5a4a42;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 20px 15px;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .back-btn {
+            text-decoration: none;
+            color: #d48a6e;
+            font-size: 24px;
+            margin-right: 15px;
+        }
+        h2 {
+            font-size: 20px;
+            margin: 0;
+            color: #5a4a42;
+        }
+        .condition-box {
+            background-color: #f2e9e1;
+            padding: 12px 15px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .condition-box span {
+            font-weight: bold;
+            color: #d48a6e;
+        }
+        .map-placeholder {
+            background-color: #e8e0d9;
+            height: 200px;
+            border-radius: 15px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #8c7a6b;
+            margin-bottom: 20px;
+            font-size: 14px;
+            border: 2px dashed #d0c5bc;
+            text-align: center;
+        }
+        .shop-card {
+            background-color: #ffffff;
+            border-radius: 15px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.03);
+            border: 1px solid #f2e9e1;
+        }
+        .shop-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: #d48a6e;
+            margin: 0 0 5px 0;
+        }
+        .shop-category {
+            font-size: 12px;
+            color: #8c7a6b;
+            margin-bottom: 10px;
+        }
+        .shop-desc {
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+        .shop-tag {
+            display: inline-block;
+            background-color: #faf7f2;
+            color: #a49182;
+            padding: 4px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/" class="back-btn">←</a>
+        <h2>検索結果</h2>
+    </div>
+
+    <div class="condition-box">
+        探した条件：<br>
+        キーワード「<span>{{ keyword }}</span>」<br>
+        利用人数「<span>{{ people }}</span>」
+    </div>
+
+    <!-- 地図表示エリア（今後のGoogle Maps連携用） -->
+    <div class="map-placeholder">
+        📍 地図は準備中だよ！<br>
+        （ここにGoogleマップが入ります）
+    </div>
+
+    <h3>おすすめのお店</h3>
+
+    <!-- ダミーの店舗データ 1 -->
+    <div class="shop-card">
+        <h4 class="shop-name">Himeji Cafe & Dining (仮)</h4>
+        <div class="shop-category">カフェ・洋食</div>
+        <div class="shop-desc">
+            {{ people }}での利用にぴったりな、おしゃれなカフェです。「{{ keyword }}」の雰囲気を楽しめるよ！
+        </div>
+        <div>
+            <span class="shop-tag">おしゃれ</span>
+            <span class="shop-tag">駅徒歩5分</span>
+        </div>
+    </div>
+
+    <!-- ダミーの店舗データ 2 -->
+    <div class="shop-card">
+        <h4 class="shop-name">和食処 しらさぎ (仮)</h4>
+        <div class="shop-category">和食・居酒屋</div>
+        <div class="shop-desc">
+            落ち着いた空間でゆったり過ごせるお店です。
+        </div>
+        <div>
+            <span class="shop-tag">個室あり</span>
+            <span class="shop-tag">落ち着く</span>
+        </div>
+    </div>
+
+</body>
+</html>
+"""
+
 @app.route('/')
 def home():
-    html_content = '''
-    <!DOCTYPE html>
-    <html lang="ja">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>EAT MAP - 誰と行く？</title>
-        <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
-        <style>
-            body {
-                font-family: 'Zen Maru Gothic', sans-serif;
-                background-color: #FFF9E6;
-                color: #5A4A42;
-                margin: 0;
-                padding: 30px 20px;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 85vh;
-            }
-            .card {
-                background: white;
-                padding: 35px 25px;
-                border-radius: 24px;
-                box-shadow: 0 8px 0 #FFE0B2;
-                border: 3px solid #FFE0B2;
-                max-width: 420px;
-                width: 100%;
-                text-align: center;
-                box-sizing: border-box;
-            }
-            .logo-icon { font-size: 42px; margin-bottom: 5px; }
-            h1 {
-                color: #FF9B50;
-                font-size: 30px;
-                margin: 0 0 10px 0;
-                letter-spacing: 2px;
-                text-shadow: 1px 1px 0 #FFE0B2;
-            }
-            p.subtitle {
-                color: #8C6A53;
-                font-size: 14px;
-                margin-bottom: 25px;
-                font-weight: bold;
-                line-height: 1.5;
-            }
-            .input-box {
-                width: 100%;
-                padding: 14px 16px;
-                border: 2px solid #FFD1A4;
-                border-radius: 16px;
-                font-size: 16px;
-                font-family: inherit;
-                outline: none;
-                box-sizing: border-box;
-                background-color: #FFFDF9;
-                transition: 0.2s;
-            }
-            .input-box:focus {
-                border-color: #FF9B50;
-                box-shadow: 0 0 8px rgba(255, 155, 80, 0.3);
-            }
-            .tag-label {
-                font-size: 13px;
-                color: #A08573;
-                text-align: left;
-                margin: 18px 0 8px 5px;
-                font-weight: bold;
-            }
-            .tags {
-                display: flex;
-                gap: 8px;
-                flex-wrap: wrap;
-                margin-bottom: 25px;
-            }
-            .tag {
-                background: #FFF0E0;
-                color: #D97330;
-                padding: 8px 14px;
-                border-radius: 20px;
-                font-size: 13px;
-                font-weight: bold;
-                cursor: pointer;
-                border: 1px solid #FFD1A4;
-                transition: 0.15s;
-                user-select: none;
-            }
-            .tag:hover {
-                background: #FF9B50;
-                color: white;
-                transform: translateY(-2px);
-            }
-            .submit-btn {
-                background-color: #FF9B50;
-                color: white;
-                border: none;
-                padding: 15px;
-                font-size: 18px;
-                font-weight: bold;
-                font-family: inherit;
-                border-radius: 30px;
-                cursor: pointer;
-                width: 100%;
-                box-shadow: 0 5px 0 #D97330;
-                transition: 0.1s;
-            }
-            .submit-btn:active {
-                transform: translateY(5px);
-                box-shadow: none;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <div class="logo-icon">🍴</div>
-            <h1>EAT MAP</h1>
-            <p class="subtitle">今日は誰とごはん行く？<br>一緒に行く人にぴったりなお店をご提案！</p>
+    return render_template_string(HOME_HTML)
 
-            <form action="/search" method="POST">
-                <input type="text" id="companionInput" name="companion" class="input-box" placeholder="例: 恋人と / 友達と4人で" required>
-
-                <div class="tag-label">👇 タップで簡単入力！</div>
-                <div class="tags">
-                    <span class="tag" onclick="setTag('恋人と')">#恋人と 🍷</span>
-                    <span class="tag" onclick="setTag('友達と')">#友達と 🎉</span>
-                    <span class="tag" onclick="setTag('上司・先輩と')">#上司と 👔</span>
-                    <span class="tag" onclick="setTag('家族と')">#家族と 👨‍👩‍👧</span>
-                    <span class="tag" onclick="setTag('ひとりで')">#ひとりごはん ☕</span>
-                </div>
-
-                <button type="submit" class="submit-btn">ぴったりなお店を探す ✨</button>
-            </form>
-        </div>
-
-        <script>
-            function setTag(text) {
-                document.getElementById('companionInput').value = text;
-            }
-        </script>
-    </body>
-    </html>
-    '''
-    return render_template_string(html_content)
-
-
-# ==========================================
-# 2. 検索処理と結果画面（ポップ＆カフェ風デザイン）
-# ==========================================
 @app.route('/search', methods=['POST'])
 def search():
-    companion = request.form.get('companion')
+    # フォームからキーワードと人数を受け取る
+    keyword = request.form.get('keyword', '')
+    people = request.form.get('people', '2名')
 
-    dummy_places = [
-        {"name": "ダイニングバー Luce", "rating": 4.5, "distance": "徒歩5分", "reason": "照明が暗く、落ち着いた個室があるため、特別な日のディナーに最適です。"},
-        {"name": "和食割烹 ひめじ", "rating": 4.8, "distance": "徒歩8分", "reason": "個室完備で静かな空間。周囲を気にせずゆっくり会話を楽しめます。"},
-        {"name": "イタリアン Vino", "rating": 4.2, "distance": "徒歩3分", "reason": "おしゃれな内装とワインが豊富で、会話が弾むカジュアルな雰囲気です。"}
-    ]
+    # 検索結果画面のテンプレートに値を渡して表示
+    return render_template_string(RESULT_HTML, keyword=keyword, people=people)
 
-    html_content = f'''
-    <!DOCTYPE html>
-    <html lang="ja">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>検索結果 - EAT MAP</title>
-        <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
-        <style>
-            body {{ font-family: 'Zen Maru Gothic', sans-serif; background-color: #FFF9E6; color: #5A4A42; margin: 0; padding: 0; }}
-            .header {{ background-color: #FF9B50; color: white; padding: 15px 20px; text-align: center; border-bottom: 4px dashed #FFF; }}
-            .header h1 {{ margin: 0; font-size: 24px; letter-spacing: 2px; }}
-            .search-keyword {{ font-size: 15px; margin-top: 8px; font-weight: bold; background: white; color: #FF9B50; display: inline-block; padding: 4px 15px; border-radius: 20px; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .map-placeholder {{
-                width: 100%; height: 220px; background-color: #E8D3B9;
-                border-radius: 16px; margin-bottom: 25px;
-                display: flex; align-items: center; justify-content: center;
-                color: #8C6A53; font-weight: bold; font-size: 18px;
-                border: 3px solid #D4B499; position: relative;
-            }}
-            .map-placeholder::before {{ content: "📍"; font-size: 30px; position: absolute; top: -15px; left: 50%; transform: translateX(-50%); }}
-            .shop-card {{ background: white; border-radius: 20px; padding: 20px; margin-bottom: 20px; box-shadow: 0 6px 0 #FFE0B2; border: 2px solid #FFE0B2; position: relative; }}
-            .rank-badge {{ position: absolute; top: -12px; left: -10px; background: #FF6B6B; color: white; font-weight: bold; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; box-shadow: 0 3px 0 #D93838; transform: rotate(-10deg); }}
-            .shop-header {{ display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; border-bottom: 2px dashed #EEE; padding-bottom: 10px; margin-left: 20px; }}
-            .shop-name {{ font-size: 20px; font-weight: bold; color: #5A4A42; margin: 0; }}
-            .shop-meta {{ font-size: 14px; color: #888; font-weight: bold; }}
-            .rating {{ color: #FFB300; font-size: 16px; }}
-            .ai-reason {{ background-color: #F0F8FF; padding: 15px; border-radius: 15px; font-size: 15px; line-height: 1.6; position: relative; margin-top: 15px; }}
-            .ai-reason::before {{ content: ''; position: absolute; top: -10px; left: 20px; border-width: 0 10px 10px 10px; border-style: solid; border-color: transparent transparent #F0F8FF transparent; }}
-            .ai-icon {{ color: #0088CC; font-weight: bold; display: block; margin-bottom: 5px; }}
-            .back-btn {{ display: block; text-align: center; margin-top: 30px; padding: 15px; background: #FF9B50; color: white; text-decoration: none; border-radius: 30px; font-weight: bold; font-size: 18px; box-shadow: 0 5px 0 #D97330; transition: 0.1s; }}
-            .back-btn:active {{ transform: translateY(5px); box-shadow: none; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>🍴 EAT MAP</h1>
-            <div class="search-keyword">「{companion}」におすすめ！</div>
-        </div>
-        <div class="container">
-            <div class="map-placeholder">
-                地図は準備中だよ！
-            </div>
-    '''
-
-    for i, place in enumerate(dummy_places):
-        rank = i + 1
-        html_content += f'''
-            <div class="shop-card">
-                <div class="rank-badge">{rank}</div>
-                <div class="shop-header">
-                    <h2 class="shop-name">{place['name']}</h2>
-                    <span class="shop-meta"><span class="rating">★{place['rating']}</span> / {place['distance']}</span>
-                </div>
-                <div class="ai-reason">
-                    <span class="ai-icon">💡 AIのおすすめ！</span>
-                    {place['reason']}
-                </div>
-            </div>
-        '''
-
-    html_content += '''
-            <a href="/" class="back-btn">もういちど探す ↩️</a>
-        </div>
-    </body>
-    </html>
-    '''
-    return render_template_string(html_content)
-
-
-# ==========================================
-# 3. 起動処理
-# ==========================================
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    # Render環境でも動くように host='0.0.0.0' を指定しています
+    app.run(host='0.0.0.0', port=5000, debug=True)
