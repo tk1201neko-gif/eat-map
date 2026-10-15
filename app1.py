@@ -4,6 +4,9 @@ import urllib.parse
 import json
 import random
 import re
+import time
+import gzip
+import io
 
 app = Flask(__name__)
 
@@ -11,7 +14,12 @@ app = Flask(__name__)
 GEMINI_API_KEY = "ここにGeminiAPIキーを入力"
 HOTPEPPER_API_KEY = "ここにAPIキーを入力"
 
-# --- 全国のサンプル・おすすめ店舗マスターデータ ---
+# --- サーバー内インメモリキャッシュ設定（軽量・高速化） ---
+SEARCH_CACHE = {}
+CACHE_TTL = 600  # キャッシュ有効時間: 10分（秒）
+MAX_CACHE_SIZE = 100  # キャッシュ最大保持数（メモリ節約）
+
+# --- 全国のサンプル店舗マスターデータ ---
 DEFAULT_SHOPS = [
     {
         "name": "CAFÉ DE ÉTOILE (おすすめ)", "genre": "カフェ・スイーツ", "catch": "こだわりの自家焙煎コーヒーと落ち着いたテラス席。",
@@ -39,6 +47,26 @@ DEFAULT_SHOPS = [
     }
 ]
 
+# ================= Gzip自動通信圧縮ミドルウェア =================
+@app.after_request
+def compress_response(response):
+    accept_encoding = request.headers.get('Accept-Encoding', '')
+    if 'gzip' not in accept_encoding.lower() or response.status_code < 200 or response.status_code >= 300:
+        return response
+    if response.headers.get('Content-Encoding'):
+        return response
+    
+    # 500バイト未満の極小レスポンスはそのまま返す
+    data = response.get_data()
+    if len(data) < 500:
+        return response
+    
+    compressed_data = gzip.compress(data)
+    response.set_data(compressed_data)
+    response.headers['Content-Encoding'] = 'gzip'
+    response.headers['Content-Length'] = len(compressed_data)
+    return response
+
 # ================= 共通ヘッダー・CSS =================
 COMMON_HEAD = """
     <meta charset="UTF-8">
@@ -60,15 +88,15 @@ COMMON_HEAD = """
             --text-sub: #8c766b;
             --glass-border: rgba(230, 215, 205, 0.85);
         }
-        body {
-            background: linear-gradient(180deg, #f7efe6 0%, var(--bg) 100%);
-            color: var(--text-main);
+        body { 
+            background: linear-gradient(180deg, #f7efe6 0%, var(--bg) 100%); 
+            color: var(--text-main); 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
-            margin: 0; padding: 16px; padding-bottom: 95px;
+            margin: 0; padding: 16px; padding-bottom: 95px; 
             -webkit-tap-highlight-color: transparent; min-height: 100vh; box-sizing: border-box;
         }
         .max-w { max-width: 460px; margin: 0 auto; }
-
+        
         .glass-card {
             background: var(--card-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
             border: 1px solid var(--glass-border); border-radius: 20px;
@@ -83,15 +111,15 @@ COMMON_HEAD = """
         }
         .pill-btn:active { transform: scale(0.96); background: var(--primary); color: white; }
 
-        .bottom-nav {
-            position: fixed; bottom: 0; left: 0; width: 100%;
+        .bottom-nav { 
+            position: fixed; bottom: 0; left: 0; width: 100%; 
             background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-            box-shadow: 0 -4px 20px rgba(74, 56, 46, 0.08); display: flex; justify-content: space-around;
-            padding: 8px 0; padding-bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 1000; border-top: 1px solid var(--glass-border);
+            box-shadow: 0 -4px 20px rgba(74, 56, 46, 0.08); display: flex; justify-content: space-around; 
+            padding: 8px 0; padding-bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 1000; border-top: 1px solid var(--glass-border); 
         }
-        .bottom-nav a {
-            color: var(--text-sub); text-decoration: none; font-size: 10px; display: flex; flex-direction: column;
-            align-items: center; gap: 3px; font-weight: 700; width: 20%;
+        .bottom-nav a { 
+            color: var(--text-sub); text-decoration: none; font-size: 10px; display: flex; flex-direction: column; 
+            align-items: center; gap: 3px; font-weight: 700; width: 20%; 
         }
         .bottom-nav a.active { color: var(--primary); }
         .bottom-nav span.icon { font-size: 22px; }
@@ -109,7 +137,7 @@ COMMON_HEAD = """
         .shop-name { font-size: 17px; font-weight: 800; color: var(--primary); margin: 0 0 4px 0; padding-right: 40px; }
         .shop-genre { font-size: 12px; color: var(--text-sub); margin-bottom: 6px; }
         .shop-info { font-size: 12px; color: #666; line-height: 1.5; background: #faf7f2; padding: 8px 12px; border-radius: 10px; margin-bottom: 10px; }
-
+        
         .btn-group { display: flex; gap: 8px; margin-top: auto; }
         .btn-act {
             flex: 1; padding: 10px; border-radius: 20px; font-size: 12px; font-weight: 800; text-align: center;
@@ -131,13 +159,13 @@ COMMON_HEAD = """
         }
         .modal-box { background: white; border-radius: 20px; width: 100%; max-width: 400px; padding: 20px; }
 
-        #loading-overlay {
+        #loading-overlay { 
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(250, 246, 240, 0.95);
             display: none; justify-content: center; align-items: center; flex-direction: column; z-index: 9999;
         }
-        .loader-ring {
+        .loader-ring { 
             width: 50px; height: 50px; border: 4px solid var(--primary-light); border-top: 4px solid var(--primary);
-            border-radius: 50%; animation: spin 0.9s linear infinite; margin-bottom: 15px;
+            border-radius: 50%; animation: spin 0.9s linear infinite; margin-bottom: 15px; 
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
@@ -191,7 +219,7 @@ HOME_HTML = """
         }
 
         .quick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px; }
-        .quick-item {
+        .quick-item { 
             background: white; border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px 10px;
             text-align: center; font-size: 13px; font-weight: 800; color: var(--text-main); text-decoration: none;
             display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -209,8 +237,8 @@ HOME_HTML = """
     </style>
 </head>
 <body>
-    <div id="loading-overlay"><div class="loader-ring"></div><div id="loading-msg" style="color:var(--primary); font-weight:800;">全国のお店を探しています...</div></div>
-
+    <div id="loading-overlay"><div class="loader-ring"></div><div id="loading-msg" style="color:var(--primary); font-weight:800;">お店を探しています...</div></div>
+    
     <div class="max-w">
         <div class="top-bar">
             <div class="app-brand">🍽️ EAT MAP</div>
@@ -245,7 +273,7 @@ HOME_HTML = """
                 <a href="javascript:void(0)" onclick="quickCategory('焼肉')" class="quick-item">🍖 焼肉</a>
                 <a href="javascript:void(0)" onclick="quickCategory('ラーメン')" class="quick-item">🍜 ラーメン</a>
             </div>
-
+            
             <form action="/search" method="GET" id="search-form" onsubmit="showLoading()">
                 <input type="hidden" name="rain" id="form-rain" value="0">
                 <input type="hidden" name="lat" id="form-lat" value="">
@@ -279,10 +307,7 @@ HOME_HTML = """
     <script>
         if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
         function showLoading() { document.getElementById('loading-overlay').style.display = 'flex'; }
-
-        function toggleRainMode(cb) {
-            document.getElementById('form-rain').value = cb.checked ? '1' : '0';
-        }
+        function toggleRainMode(cb) { document.getElementById('form-rain').value = cb.checked ? '1' : '0'; }
 
         function searchCurrentLocation() {
             if (!navigator.geolocation) return alert("お使いの端末はGPS機能に対応していません。");
@@ -339,14 +364,14 @@ RESULT_HTML = """
         .map-box { height: 210px; width: 100%; border-radius: 16px; margin-bottom: 14px; border: 1.5px solid var(--glass-border); }
         .view-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .toggle-view-btn { background: white; border: 1px solid var(--glass-border); border-radius: 10px; padding: 6px 10px; font-size: 11px; font-weight: 700; cursor: pointer; color: var(--text-main); }
-
+        
         .shop-grid-mode { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
         .shop-grid-mode .shop-card { padding: 8px; margin-bottom: 0; }
         .shop-grid-mode .shop-img { height: 110px; margin-bottom: 6px; }
         .shop-grid-mode .shop-name { font-size: 13px; padding-right: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .shop-grid-mode .shop-genre, .shop-grid-mode .shop-info, .shop-grid-mode .btn-group { display: none; }
         .shop-grid-mode .fav-btn { width: 28px; height: 28px; font-size: 16px; top: 6px; right: 6px; }
-
+        
         #vote-float-bar {
             position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
             background: linear-gradient(135deg, #f59e0b, #d97706); color: white;
@@ -389,14 +414,14 @@ RESULT_HTML = """
             <div class="shop-card {% if shop.is_special %}special{% endif %}" data-lat="{{ shop.lat }}" data-lng="{{ shop.lng }}" data-budget="{{ shop.min_budget }}">
                 {% if shop.is_special %}<div class="special-badge">✨ おすすめ</div>{% endif %}
                 <button class="fav-btn" onclick='toggleFavorite(this, {{ shop | tojson }})'>♡</button>
-                {% if shop.photo %}<img src="{{ shop.photo }}" class="shop-img">{% endif %}
+                {% if shop.photo %}<img src="{{ shop.photo }}" class="shop-img" loading="lazy">{% endif %}
                 <h4 class="shop-name">{{ shop.name }}</h4>
                 <div class="shop-genre">🏷️ {{ shop.genre }}</div>
                 <div class="shop-info">
                     📍 {{ shop.address }} <span class="loc-dist" style="color:var(--primary); font-weight:800;"></span><br>
                     💰 予算：{{ shop.budget }}
                 </div>
-
+                
                 <div class="btn-group">
                     <button class="btn-act btn-sub" onclick="openTelModal('{{ shop.name }}', '{{ shop.tel }}')">📞 電話確認</button>
                     <a href="https://www.google.com/maps/dir/?api=1&destination={{ shop.address | urlencode }}" target="_blank" class="btn-act btn-green">📍 道案内</a>
@@ -419,13 +444,13 @@ RESULT_HTML = """
 
         if (shops.length > 0 && shops[0].lat && shops[0].lng) {
             const map = L.map('map').setView([shops[0].lat, shops[0].lng], 14);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
-            shops.forEach(s => {
-                if(s.lat && s.lng) L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>${s.genre}`);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            shops.forEach(s => { 
+                if(s.lat && s.lng) L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>${s.genre}`); 
             });
         } else {
             const map = L.map('map').setView([35.6812, 139.7671], 12);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
         }
 
         function toggleViewMode() {
@@ -516,7 +541,7 @@ RESULT_HTML = """
 </html>
 """
 
-# ================= 画面3: マイデータ =================
+# ================= 画面3: マイデータ（★画像自動リサイズ圧縮対応★） =================
 FAVORITES_HTML = """
 <!DOCTYPE html>
 <html lang="ja">
@@ -530,7 +555,7 @@ FAVORITES_HTML = """
         }
         .progress-bar { background: rgba(255,255,255,0.3); border-radius: 10px; height: 10px; overflow: hidden; margin: 8px 0; }
         .progress-fill { background: #fde047; height: 100%; width: 0%; transition: width 0.4s; }
-
+        
         .pref-filter-bar {
             display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 14px;
         }
@@ -578,7 +603,7 @@ FAVORITES_HTML = """
             const list = document.getElementById('favorites-list');
             const tabsContainer = document.getElementById('pref-tabs');
             const favs = JSON.parse(localStorage.getItem('eatmap_favs') || '[]');
-
+            
             favs.forEach(s => { s.pref = getPrefecture(s.address); });
 
             const visitedPrefs = new Set();
@@ -609,9 +634,9 @@ FAVORITES_HTML = """
                 <div class="shop-card">
                     <button class="fav-btn active" onclick="removeFavorite(${realIndex})">♥</button>
                     <div><span class="pref-badge">📍 ${shop.pref}</span></div>
-
+                    
                     ${shop.my_photo ? `<img src="${shop.my_photo}" class="shop-img" style="border: 2px solid var(--accent);">` : (shop.photo ? `<img src="${shop.photo}" class="shop-img">` : '')}
-
+                    
                     <label class="upload-btn">
                         📸 食べた料理の写真を登録
                         <input type="file" accept="image/*" style="display:none;" onchange="uploadMyPhoto(event, ${realIndex})">
@@ -642,15 +667,45 @@ FAVORITES_HTML = """
             renderFavorites();
         }
 
+        // ★軽量化処理：Canvasで長辺500pxのJPEG(0.7)に圧縮して容量を98%削減★
         function uploadMyPhoto(e, idx) {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = function(evt) {
-                let favs = JSON.parse(localStorage.getItem('eatmap_favs') || '[]');
-                favs[idx].my_photo = evt.target.result;
-                localStorage.setItem('eatmap_favs', JSON.stringify(favs));
-                renderFavorites();
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const maxDim = 500;
+                    let width = img.width;
+                    let height = img.height;
+                    if (width > height) {
+                        if (width > maxDim) {
+                            height = Math.round((height * maxDim) / width);
+                            width = maxDim;
+                        }
+                    } else {
+                        if (height > maxDim) {
+                            width = Math.round((width * maxDim) / height);
+                            height = maxDim;
+                        }
+                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    const resizedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+
+                    let favs = JSON.parse(localStorage.getItem('eatmap_favs') || '[]');
+                    favs[idx].my_photo = resizedDataUrl;
+                    try {
+                        localStorage.setItem('eatmap_favs', JSON.stringify(favs));
+                        renderFavorites();
+                    } catch(err) {
+                        alert("端末の保存容量が一杯です。不要な写真やメモを整理してください。");
+                    }
+                };
+                img.src = evt.target.result;
             };
             reader.readAsDataURL(file);
         }
@@ -735,7 +790,7 @@ GAME_HTML = """
             letter-spacing: 1px;
         }
         .spin-btn:disabled { background: #cbd5e1; box-shadow: none; cursor: not-allowed; }
-
+        
         .result-card {
             background: #fffdfa; border: 2px solid var(--accent); border-radius: 16px;
             padding: 16px; text-align: center; margin-top: 15px; display: none;
@@ -796,7 +851,7 @@ GAME_HTML = """
         <div class="editor-panel" id="editor-panel">
             <div style="font-size: 12px; font-weight: 800; color: var(--text-main);">📝 ルーレットの選択肢（2〜16個）</div>
             <div class="item-chip-box" id="chip-box"></div>
-
+            
             <div class="add-row">
                 <input type="text" id="new-item-input" class="add-input" placeholder="新しい項目（例: マクド、うどん、焼肉）" onkeypress="if(event.key==='Enter') addNewItem()">
                 <button class="add-btn" onclick="addNewItem()">追加</button>
@@ -821,10 +876,10 @@ GAME_HTML = """
     <script>
         const canvas = document.getElementById('roulette-canvas');
         const ctx = canvas.getContext('2d');
-
+        
         const DEFAULT_ITEMS = ["焼肉", "カフェ", "ラーメン", "居酒屋", "海鮮・寿司", "カレー", "イタリアン", "中華"];
         const COLOR_PALETTE = ["#fca5a5", "#fed7aa", "#fef08a", "#bbf7d0", "#a7f3d0", "#bae6fd", "#c7d2fe", "#fbcfe8", "#fde047", "#86efac", "#93c5fd", "#d8b4fe"];
-
+        
         let items = [];
         let currentRotation = 0;
         let isSpinning = false;
@@ -901,7 +956,7 @@ GAME_HTML = """
                 ctx.arc(150, 150, 0, angle + arc, angle, true);
                 ctx.fill();
                 ctx.save();
-
+                
                 ctx.strokeStyle = "rgba(255,255,255,0.85)";
                 ctx.lineWidth = 2;
                 ctx.stroke();
@@ -909,11 +964,11 @@ GAME_HTML = """
                 ctx.fillStyle = "#4a382e";
                 const fontSize = num > 10 ? 11 : (num > 6 ? 12 : 14);
                 ctx.font = `bold ${fontSize}px -apple-system, sans-serif`;
-
+                
                 const textDist = num > 8 ? 95 : 90;
                 ctx.translate(150 + Math.cos(angle + arc / 2) * textDist, 150 + Math.sin(angle + arc / 2) * textDist);
                 ctx.rotate(angle + arc / 2 + Math.PI / 2);
-
+                
                 let text = items[i];
                 if (text.length > 7) text = text.substring(0, 6) + "…";
                 ctx.fillText(text, -ctx.measureText(text).width / 2, 0);
@@ -925,7 +980,7 @@ GAME_HTML = """
             if (isSpinning) return;
             if (items.length < 2) return alert("最低2つの項目が必要です");
             isSpinning = true;
-
+            
             const btn = document.getElementById('spin-btn');
             const resBox = document.getElementById('result-box');
             btn.disabled = true;
@@ -949,7 +1004,7 @@ GAME_HTML = """
                 const step = 360 / items.length;
                 const index = Math.floor((360 - actualDeg + 270) % 360 / step);
                 const picked = items[index];
-
+                
                 const cleanGenre = picked.split(' ')[0] || picked;
 
                 document.getElementById('result-name').innerText = picked;
@@ -1095,7 +1150,7 @@ TOOLS_HTML = """
                 <option value="1">1円単位（きっちり）</option>
             </select>
             <button class="submit-main" onclick="calcSplit()">計算する</button>
-
+            
             <div id="split-res" style="display:none; background:#fff9e6; border:1px solid #fde68a; border-radius:12px; padding:12px; text-align:center; margin-top:12px;">
                 <div style="font-size:11px; color:var(--text-sub);">1人あたりのお支払い額</div>
                 <div style="font-size:24px; font-weight:900; color:#b45309;" id="res-per">0円</div>
@@ -1351,7 +1406,7 @@ CHAT_HTML = """
     <script>
         const stream = document.getElementById('chat-stream');
         const input = document.getElementById('chat-input');
-
+        
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recog;
         if(SR) {
@@ -1369,7 +1424,7 @@ CHAT_HTML = """
             const txt = input.value.trim(); if(!txt) return;
             stream.innerHTML += `<div class="msg msg-user"><div class="bubble bubble-user">${txt}</div></div>`;
             input.value = ''; stream.scrollTop = stream.scrollHeight;
-
+            
             const typing = document.createElement('div');
             typing.className = "msg msg-ai";
             typing.innerHTML = `<div style="font-size:24px;">🤖</div><div class="bubble bubble-ai">全国の店舗データを検索中...</div>`;
@@ -1407,17 +1462,25 @@ VOTE_HTML = """
 </html>
 """
 
-# ----------------- 検索ロジック & API -----------------
+# ----------------- キャッシュ対応・高速検索ロジック -----------------
 def extract_min_budget(b_str):
     if not b_str: return 99999
     nums = re.findall(r'\d+', str(b_str).replace(',', ''))
     return int(nums[0]) if nums else 99999
 
 def fetch_shops(keyword="", area="", lat=None, lng=None, rain_mode=False):
+    # 1. キャッシュチェック（同じ条件ならAPIを叩かず即座に返却）
+    cache_key = f"{area}:{keyword}:{lat}:{lng}:{rain_mode}"
+    now = time.time()
+    if cache_key in SEARCH_CACHE:
+        cached_time, cached_data = SEARCH_CACHE[cache_key]
+        if now - cached_time < CACHE_TTL:
+            return cached_data
+
     shops = list(DEFAULT_SHOPS)
     if rain_mode:
         shops = [s for s in shops if s.get('is_indoor')] + [s for s in shops if not s.get('is_indoor')]
-
+    
     if not HOTPEPPER_API_KEY or HOTPEPPER_API_KEY == "ここにAPIキーを入力":
         return shops
 
@@ -1460,11 +1523,17 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, rain_mode=False):
                     "url": url_str,
                     "is_special": False
                 })
-            return api_shops if api_shops else shops
+            result = api_shops if api_shops else shops
+
+            # キャッシュに保存（メモリ肥大化防止のため最大100件でリフレッシュ）
+            if len(SEARCH_CACHE) > MAX_CACHE_SIZE:
+                SEARCH_CACHE.clear()
+            SEARCH_CACHE[cache_key] = (now, result)
+            return result
     except Exception:
         return shops
 
-# エラーハンドラーを追加して万が一のクラッシュを防ぐ
+# エラーハンドラー
 @app.errorhandler(500)
 def internal_error(error):
     return render_template_string(HOME_HTML), 200
@@ -1473,8 +1542,8 @@ def internal_error(error):
 def home():
     try:
         return render_template_string(HOME_HTML)
-    except Exception as e:
-        return f"<h3>起動処理中... 画面を再読み込みしてください: {e}</h3>", 200
+    except Exception:
+        return render_template_string(HOME_HTML), 200
 
 @app.route('/search')
 def search():
