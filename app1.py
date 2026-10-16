@@ -1,20 +1,10 @@
 # ==============================================================================
 # 【★ 最重要設定：APIキー入力エリア ★】
 # ------------------------------------------------------------------------------
-# 以下の " " の中に取得したAPIキーを貼り付けてください。
-# （Render等の環境変数に設定した場合は自動でそちらが最優先で読み込まれます）
-#
-# 1. ホットペッパーグルメ APIキー (全国の実在店舗・写真・住所データを取得)
-#    👉 取得先: https://webservice.recruit.co.jp/
-#
-# 2. Google Gemini APIキー (AIチャットを本物のAIにする場合)
-#    👉 取得先: https://aistudio.google.com/app/apikey
-# ==============================================================================
 import os
 
 HOTPEPPER_API_KEY = os.environ.get("HOTPEPPER_API_KEY", "ここにホットペッパーAPIキーを入力")
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "ここにGeminiAPIキーを入力")
-
 # ==============================================================================
 
 from flask import Flask, request, render_template_string, jsonify, Response
@@ -55,9 +45,14 @@ DEFAULT_SHOPS = [
     }
 ]
 
-# Gzip自動圧縮
+# Gzip自動圧縮 & キャッシュ制御
 @app.after_request
-def compress_response(response):
+def add_header_and_compress(response):
+    if response.content_type and 'text/html' in response.content_type:
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+
     accept_encoding = request.headers.get('Accept-Encoding', '')
     if 'gzip' not in accept_encoding.lower() or response.status_code < 200 or response.status_code >= 300:
         return response
@@ -226,6 +221,31 @@ BOTTOM_NAV = """
         window.addEventListener('online', checkNetworkStatus);
         window.addEventListener('offline', checkNetworkStatus);
         window.addEventListener('DOMContentLoaded', checkNetworkStatus);
+
+        async function forceUpdateApp() {
+            if ('caches' in window) {
+                const names = await caches.keys();
+                await Promise.all(names.map(name => caches.delete(name)));
+            }
+            if ('serviceWorker' in navigator) {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                for (let r of regs) { await r.update(); }
+            }
+            window.location.reload(true);
+        }
+
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').then(reg => {
+                reg.onupdatefound = () => {
+                    const installing = reg.installing;
+                    installing.onstatechange = () => {
+                        if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+                            window.location.reload();
+                        }
+                    };
+                };
+            });
+        }
     </script>
 """
 
@@ -246,6 +266,7 @@ HOME_HTML = """
         <div class="top-bar">
             <div class="app-brand">🍽️ EAT MAP</div>
             <div style="display:flex; gap:6px;">
+                <button class="theme-btn" onclick="forceUpdateApp()" title="最新版に更新">🔄</button>
                 <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
                 <button class="pill-btn" onclick="shareApp()">📤 シェア</button>
             </div>
@@ -311,7 +332,6 @@ HOME_HTML = """
     """ + BOTTOM_NAV + """
 
     <script>
-        if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
         function showLoading() {
             if (!navigator.onLine) { alert("現在オフラインです。"); return false; }
             document.getElementById('loading-overlay').style.display = 'flex';
@@ -385,6 +405,7 @@ RESULT_HTML = """
             <a href="/" class="pill-btn">← 条件変更</a>
             <div style="font-size:14px; font-weight:900; color:var(--primary);">{{ search_title }} ({{ shops|length }}件)</div>
             <div style="display:flex; gap:6px;">
+                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
                 <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
                 <button class="pill-btn" onclick="shareApp()">📤 シェア</button>
             </div>
@@ -527,6 +548,7 @@ FAVORITES_HTML = """
         <div class="top-bar">
             <h2 style="font-size: 18px; margin: 0; color: var(--primary);">👑 グルメマイデータ</h2>
             <div style="display:flex; gap:6px;">
+                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
                 <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
                 <button class="pill-btn" onclick="exportBackup()">📋 引き継ぎ</button>
             </div>
@@ -673,7 +695,10 @@ GAME_HTML = """
     <div class="max-w">
         <div class="top-bar">
             <h2 style="font-size: 18px; color: var(--primary); margin: 0;">🎰 店決めルーレット</h2>
-            <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+            <div style="display:flex; gap:6px;">
+                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
+                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+            </div>
         </div>
 
         <div class="roulette-wrapper">
@@ -799,7 +824,10 @@ TOOLS_HTML = """
     <div class="max-w">
         <div class="top-bar">
             <h2 style="font-size: 18px; color: var(--primary); margin: 0;">🧮 おでかけ・飲み会サポート</h2>
-            <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+            <div style="display:flex; gap:6px;">
+                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
+                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+            </div>
         </div>
 
         <div class="timer-panel">
@@ -1004,6 +1032,7 @@ TOOLS_HTML = """
             const loS = String(courseLoSecs % 60).padStart(2, '0');
             const exM = String(Math.floor(courseExitSecs / 60)).padStart(2, '0');
             const exS = String(courseExitSecs % 60).padStart(2, '0');
+
             document.getElementById('digits-lo').innerText = `${loM}:${loS}`;
             document.getElementById('digits-exit').innerText = `${exM}:${exS}`;
         }
@@ -1089,7 +1118,10 @@ CHAT_HTML = """
     <div class="max-w" style="padding-bottom:70px;">
         <div class="top-bar">
             <h2 style="font-size: 18px; color: var(--primary); margin: 0;">🤖 AIコンシェルジュ</h2>
-            <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+            <div style="display:flex; gap:6px;">
+                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
+                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+            </div>
         </div>
 
         <div class="glass-card" style="min-height:350px;" id="chat-stream">
@@ -1213,6 +1245,11 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, budget_filter="", rain_
     except Exception:
         return shops
 
+# ================= UptimeRobot死活監視用エンドポイント =================
+@app.route('/ping')
+def ping():
+    return "OK", 200
+
 @app.errorhandler(500)
 def internal_error(error):
     return render_template_string(HOME_HTML), 200
@@ -1254,7 +1291,7 @@ def vote():
     names = request.args.get('shops', '').split(',')
     return render_template_string(VOTE_HTML, shop_names=[n for n in names if n])
 
-# Gemini API 実装（キー未入力時は自動モック応答）
+# Gemini API 実装
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     msg = request.json.get('message', '') if request.json else ''
@@ -1286,23 +1323,34 @@ def manifest():
 @app.route('/sw.js')
 def sw():
     sw_code = """
-    const CACHE_NAME = 'eatmap-cache-v5';
-    const PRECACHE_URLS = ['/', '/favorites', '/game', '/tools', '/manifest.json'];
+    const CACHE_NAME = 'eatmap-cache-v6';
 
     self.addEventListener('install', (e) => {
-      e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(PRECACHE_URLS)).then(() => self.skipWaiting()));
+      self.skipWaiting();
     });
+
     self.addEventListener('activate', (e) => {
-      e.waitUntil(caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k)))).then(() => self.clients.claim()));
+      e.waitUntil(
+        caches.keys().then(keys => Promise.all(
+          keys.map(k => k !== CACHE_NAME && caches.delete(k))
+        )).then(() => self.clients.claim())
+      );
     });
+
     self.addEventListener('fetch', (e) => {
       if (e.request.method !== 'GET') return;
+      if (e.request.headers.get('accept') && e.request.headers.get('accept').includes('text/html')) {
+        e.respondWith(
+          fetch(e.request).then(res => {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+            return res;
+          }).catch(() => caches.match(e.request).then(c => c || caches.match('/')))
+        );
+        return;
+      }
       e.respondWith(
-        fetch(e.request).then(res => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
-          return res;
-        }).catch(() => caches.match(e.request).then(c => c || caches.match('/')))
+        caches.match(e.request).then(cached => cached || fetch(e.request))
       );
     });
     """
