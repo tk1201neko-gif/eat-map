@@ -7,7 +7,7 @@ HOTPEPPER_API_KEY = os.environ.get("HOTPEPPER_API_KEY", "ここにホットペ�
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "ここにGeminiAPIキーを入力")
 # ==============================================================================
 
-from flask import Flask, request, render_template_string, jsonify, Response
+from flask import Flask, request, render_template_string, jsonify, Response, send_from_directory
 import urllib.request
 import urllib.parse
 import json
@@ -67,11 +67,12 @@ def add_header_and_compress(response):
     response.headers['Content-Length'] = len(compressed_data)
     return response
 
-# ================= 共通CSS・ヘッダー =================
+# ================= 共通CSS・ヘッダー（アプリアイコン設定追加） =================
 COMMON_HEAD = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>">
+    <link rel="icon" type="image/png" href="/icon.png">
+    <link rel="apple-touch-icon" href="/icon.png">
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#c2785c">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -1032,6 +1033,7 @@ TOOLS_HTML = """
             const loS = String(courseLoSecs % 60).padStart(2, '0');
             const exM = String(Math.floor(courseExitSecs / 60)).padStart(2, '0');
             const exS = String(courseExitSecs % 60).padStart(2, '0');
+
             document.getElementById('digits-lo').innerText = `${loM}:${loS}`;
             document.getElementById('digits-exit').innerText = `${exM}:${exS}`;
         }
@@ -1244,6 +1246,16 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, budget_filter="", rain_
     except Exception:
         return shops
 
+# ================= アイコン画像配信エンドポイント =================
+@app.route('/icon.png')
+def app_icon():
+    if os.path.exists('icon.png'):
+        return send_from_directory('.', 'icon.png', mimetype='image/png')
+    elif os.path.exists('static/icon.png'):
+        return send_from_directory('static', 'icon.png', mimetype='image/png')
+    # まだ画像ファイルがアップロードされていない場合は仮のアイコン画像を返却
+    return urllib.request.urlopen("https://placehold.co/192x192/c2785c/ffffff?text=%F0%9F%8D%BD%EF%B8%8F").read(), 200, {'Content-Type': 'image/png'}
+
 # ================= UptimeRobot死活監視用エンドポイント =================
 @app.route('/ping')
 def ping():
@@ -1315,14 +1327,17 @@ def manifest():
     return jsonify({
         "name": "EAT MAP - 全国の美味しいお店探し", "short_name": "EAT MAP", "start_url": "/", "display": "standalone",
         "background_color": "#121214", "theme_color": "#c2785c",
-        "icons": [{"src": "https://placehold.co/192x192/c2785c/ffffff?text=%F0%9F%8D%BD%EF%B8%8F", "sizes": "192x192", "type": "image/png"}]
+        "icons": [
+            {"src": "/icon.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}
+        ]
     })
 
 # PWA Service Worker
 @app.route('/sw.js')
 def sw():
     sw_code = """
-    const CACHE_NAME = 'eatmap-cache-v7';
+    const CACHE_NAME = 'eatmap-cache-v8';
 
     self.addEventListener('install', (e) => {
       self.skipWaiting();
