@@ -129,7 +129,7 @@ COMMON_HEAD = """
             padding: 8px 14px; border-radius: 25px; font-size: 12px; font-weight: 800; cursor: pointer; text-decoration: none;
             display: inline-flex; align-items: center; gap: 4px;
         }
-        .theme-btn {
+        .icon-circle-btn {
             background: var(--primary-light); color: var(--primary); border: 1px solid var(--glass-border);
             border-radius: 50%; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center;
             font-size: 16px; cursor: pointer;
@@ -210,7 +210,7 @@ BOTTOM_NAV = """
         }
         function updateThemeIcons() {
             const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            document.querySelectorAll('.theme-btn').forEach(b => b.innerText = isDark ? '☀️' : '🌙');
+            document.querySelectorAll('.theme-toggle-btn').forEach(b => b.innerText = isDark ? '☀️' : '🌙');
         }
         window.addEventListener('DOMContentLoaded', updateThemeIcons);
 
@@ -266,8 +266,8 @@ HOME_HTML = """
         <div class="top-bar">
             <div class="app-brand">🍽️ EAT MAP</div>
             <div style="display:flex; gap:6px;">
-                <button class="theme-btn" onclick="forceUpdateApp()" title="最新版に更新">🔄</button>
-                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+                <button class="icon-circle-btn reload-btn" onclick="forceUpdateApp()" title="最新版に更新">🔄</button>
+                <button class="icon-circle-btn theme-toggle-btn" onclick="toggleDarkMode()">🌙</button>
                 <button class="pill-btn" onclick="shareApp()">📤 シェア</button>
             </div>
         </div>
@@ -405,8 +405,8 @@ RESULT_HTML = """
             <a href="/" class="pill-btn">← 条件変更</a>
             <div style="font-size:14px; font-weight:900; color:var(--primary);">{{ search_title }} ({{ shops|length }}件)</div>
             <div style="display:flex; gap:6px;">
-                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
-                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+                <button class="icon-circle-btn reload-btn" onclick="forceUpdateApp()">🔄</button>
+                <button class="icon-circle-btn theme-toggle-btn" onclick="toggleDarkMode()">🌙</button>
                 <button class="pill-btn" onclick="shareApp()">📤 シェア</button>
             </div>
         </div>
@@ -548,8 +548,8 @@ FAVORITES_HTML = """
         <div class="top-bar">
             <h2 style="font-size: 18px; margin: 0; color: var(--primary);">👑 グルメマイデータ</h2>
             <div style="display:flex; gap:6px;">
-                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
-                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+                <button class="icon-circle-btn reload-btn" onclick="forceUpdateApp()">🔄</button>
+                <button class="icon-circle-btn theme-toggle-btn" onclick="toggleDarkMode()">🌙</button>
                 <button class="pill-btn" onclick="exportBackup()">📋 引き継ぎ</button>
             </div>
         </div>
@@ -696,8 +696,8 @@ GAME_HTML = """
         <div class="top-bar">
             <h2 style="font-size: 18px; color: var(--primary); margin: 0;">🎰 店決めルーレット</h2>
             <div style="display:flex; gap:6px;">
-                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
-                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+                <button class="icon-circle-btn reload-btn" onclick="forceUpdateApp()">🔄</button>
+                <button class="icon-circle-btn theme-toggle-btn" onclick="toggleDarkMode()">🌙</button>
             </div>
         </div>
 
@@ -825,8 +825,8 @@ TOOLS_HTML = """
         <div class="top-bar">
             <h2 style="font-size: 18px; color: var(--primary); margin: 0;">🧮 おでかけ・飲み会サポート</h2>
             <div style="display:flex; gap:6px;">
-                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
-                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+                <button class="icon-circle-btn reload-btn" onclick="forceUpdateApp()">🔄</button>
+                <button class="icon-circle-btn theme-toggle-btn" onclick="toggleDarkMode()">🌙</button>
             </div>
         </div>
 
@@ -1032,7 +1032,6 @@ TOOLS_HTML = """
             const loS = String(courseLoSecs % 60).padStart(2, '0');
             const exM = String(Math.floor(courseExitSecs / 60)).padStart(2, '0');
             const exS = String(courseExitSecs % 60).padStart(2, '0');
-
             document.getElementById('digits-lo').innerText = `${loM}:${loS}`;
             document.getElementById('digits-exit').innerText = `${exM}:${exS}`;
         }
@@ -1119,8 +1118,8 @@ CHAT_HTML = """
         <div class="top-bar">
             <h2 style="font-size: 18px; color: var(--primary); margin: 0;">🤖 AIコンシェルジュ</h2>
             <div style="display:flex; gap:6px;">
-                <button class="theme-btn" onclick="forceUpdateApp()">🔄</button>
-                <button class="theme-btn" onclick="toggleDarkMode()">🌙</button>
+                <button class="icon-circle-btn reload-btn" onclick="forceUpdateApp()">🔄</button>
+                <button class="icon-circle-btn theme-toggle-btn" onclick="toggleDarkMode()">🌙</button>
             </div>
         </div>
 
@@ -1323,7 +1322,7 @@ def manifest():
 @app.route('/sw.js')
 def sw():
     sw_code = """
-    const CACHE_NAME = 'eatmap-cache-v6';
+    const CACHE_NAME = 'eatmap-cache-v7';
 
     self.addEventListener('install', (e) => {
       self.skipWaiting();
