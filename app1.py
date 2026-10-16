@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】シンプル × ポップ 完全統合版 app1.py
+# 【EAT MAP】シンプル × ポップ（人数選択対応）完全版 app1.py
 # ------------------------------------------------------------------------------
 # ■ APIキー設定:
 #   Render管理画面の「Environment」への登録を推奨します。
@@ -341,9 +341,11 @@ HOME_HTML = """
                         </select>
                     </div>
                     <div class="input-group" style="flex:1;">
-                        <select name="count">
-                            <option value="15" selected>15件取得</option>
-                            <option value="30">30件取得</option>
+                        <select name="people">
+                            <option value="1名">👤 1名 (ソロ)</option>
+                            <option value="2名" selected>👥 2名 (ペア)</option>
+                            <option value="3〜4名">🍻 3〜4名 (グループ)</option>
+                            <option value="5名以上">🎉 5名以上 (宴会)</option>
                         </select>
                     </div>
                 </div>
@@ -412,7 +414,7 @@ RESULT_HTML = """
     <div class="max-w">
         <div class="top-bar">
             <a href="/" class="btn-sm">← 戻る</a>
-            <div style="font-size:13px; font-weight:800; color:var(--text-muted);">{{ search_title }} ({{ shops|length }}件)</div>
+            <div style="font-size:13px; font-weight:800; color:var(--text-muted);">{{ search_title }} [{{ people }}] ({{ shops|length }}件)</div>
             <button class="btn-sm" style="background:var(--accent-yellow); border-color:#fde047; color:#78350f;" onclick="sendSelectedVote()">🗳️ LINE投票 (<span id="vote-count">0</span>)</button>
         </div>
 
@@ -1064,10 +1066,11 @@ def extract_budget(b_str):
     nums = re.findall(r'\d+', str(b_str).replace(',', ''))
     return int(nums[0]) if nums else 99999
 
-def fetch_shops(keyword="", area="", lat=None, lng=None, budget_filter="", count=15):
+def fetch_shops(keyword="", area="", lat=None, lng=None, budget_filter="", people="2名"):
     keyword = html.escape(keyword[:50])
     area = html.escape(area[:50])
-    cache_key = f"{area}:{keyword}:{lat}:{lng}:{budget_filter}:{count}"
+    people = html.escape(people[:20])
+    cache_key = f"{area}:{keyword}:{lat}:{lng}:{budget_filter}:{people}"
     now = time.time()
     
     if cache_key in SEARCH_CACHE:
@@ -1079,7 +1082,7 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, budget_filter="", count
     if not HOTPEPPER_API_KEY or "ここに" in HOTPEPPER_API_KEY:
         return shops
 
-    params = {"key": HOTPEPPER_API_KEY, "count": min(int(count), 30), "format": "json"}
+    params = {"key": HOTPEPPER_API_KEY, "count": 20, "format": "json"}
     if lat and lng:
         params["lat"] = lat
         params["lng"] = lng
@@ -1135,12 +1138,12 @@ def search():
     k = request.args.get('keyword', '')
     a = request.args.get('area', '')
     b = request.args.get('budget_filter', '')
-    c = request.args.get('count', '15')
+    p = request.args.get('people', '2名')
     lat = request.args.get('lat')
     lng = request.args.get('lng')
     title = f"{a} {k}".strip() or "おすすめ店舗"
-    shops = fetch_shops(keyword=k, area=a, lat=lat, lng=lng, budget_filter=b, count=c)
-    return render_template_string(RESULT_HTML, shops=shops, search_title=title)
+    shops = fetch_shops(keyword=k, area=a, lat=lat, lng=lng, budget_filter=b, people=p)
+    return render_template_string(RESULT_HTML, shops=shops, search_title=title, people=p)
 
 @app.route('/favorites')
 def favorites():
@@ -1194,7 +1197,7 @@ def manifest():
 @app.route('/sw.js')
 def sw():
     sw_code = """
-    const CACHE_NAME = 'eatmap-v11';
+    const CACHE_NAME = 'eatmap-v12';
     self.addEventListener('install', e => self.skipWaiting());
     self.addEventListener('activate', e => e.waitUntil(
         caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k)))).then(() => self.clients.claim())
