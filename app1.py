@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】シンプル × ポップ 完全統合版 app1.py
+# 【EAT MAP】シンプル × ポップ 完全統合版 app1.py (エラー詳細表示版)
 # ------------------------------------------------------------------------------
 # ■ 組み込み機能:
 #   - 見やすい地図システム (高視認性Voyager / リアル航空写真 / 全画面拡大 / 番号付きピン)
@@ -26,9 +26,9 @@ from flask import Flask, request, render_template_string, jsonify, Response
 
 app = Flask(__name__)
 
-# パターンB: 環境変数を優先しつつ、未設定なら直接キーを使う安全設計
+# 環境変数から読み込み（GitHubのシークレットスキャン対策済み）
 HOTPEPPER_API_KEY   = os.environ.get("HOTPEPPER_API_KEY", "").strip()
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "").strip()
 MAPBOX_ACCESS_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN", "").strip()
 
 # ================= 1. 安全対策・セキュリティ機構 =================
@@ -488,14 +488,12 @@ RESULT_HTML = """
         .map-wrapper { position: relative; width: 100%; margin-bottom: 12px; }
         .map-box { height: 230px; width: 100%; border-radius: 16px; border: 1.5px solid var(--card-border); transition: all 0.25s ease; box-shadow: var(--shadow); }
 
-        /* 全画面表示用クラス */
         .map-box.is-fullscreen {
             position: fixed !important; top: 0 !important; left: 0 !important;
             width: 100vw !important; height: 100vh !important;
             border-radius: 0 !important; z-index: 9999 !important; margin: 0 !important;
         }
 
-        /* 地図内フロート操作パネル */
         .map-controls-bar {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
             display: flex; gap: 6px;
@@ -508,7 +506,6 @@ RESULT_HTML = """
         }
         [data-theme="dark"] .map-float-btn { background: rgba(32, 35, 45, 0.95); color: #f8fafc; border-color: #2d3240; }
 
-        /* 番号付きカスタムマーカー */
         .custom-shop-pin {
             background: var(--primary); color: white; border-radius: 50%;
             border: 2px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.35);
@@ -529,7 +526,6 @@ RESULT_HTML = """
             <button class="btn-sm" style="background:var(--accent-yellow); border-color:#fde047; color:#78350f;" onclick="sendSelectedVote()">🗳️ LINE投票 (<span id="vote-count">0</span>)</button>
         </div>
 
-        <!-- 見やすい地図エリア -->
         <div class="map-wrapper" id="map-wrap">
             <div id="map" class="map-box"></div>
 
@@ -579,7 +575,6 @@ RESULT_HTML = """
         </div>
     </div>
 
-    <!-- 電話カンペモーダル -->
     <div class="modal-bg" id="call-modal" onclick="closeCallModal(event)">
         <div class="modal-body">
             <h3 style="font-size:16px; margin:0 0 10px 0; color:var(--primary);">📞 お店への電話確認カンペ</h3>
@@ -611,12 +606,10 @@ RESULT_HTML = """
         map = L.map('map', { zoomControl: false }).setView([defaultLat, defaultLng], shops.length > 0 ? 14 : 12);
         L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-        // 3種類の高品質地図タイル設定
         function getMapLayer(mode, isDark) {
             if (mode === 'satellite') {
                 return L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-                    maxZoom: 19,
-                    attribution: 'Tiles &copy; Esri'
+                    maxZoom: 19, attribution: 'Tiles &copy; Esri'
                 });
             } else if (mapboxToken) {
                 const styleId = isDark ? 'mapbox/dark-v11' : 'mapbox/streets-v12';
@@ -624,7 +617,6 @@ RESULT_HTML = """
                     tileSize: 512, zoomOffset: -1, maxZoom: 20, attribution: '&copy; Mapbox'
                 });
             } else {
-                // CartoDB Voyager: 文字が大きく道路もくっきり見やすい街歩き用マップ
                 return L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
                     maxZoom: 19, attribution: '&copy; CartoDB &copy; OpenStreetMap'
                 });
@@ -677,7 +669,6 @@ RESULT_HTML = """
             }, () => alert("現在地を取得できませんでした"), { timeout: 6000 });
         }
 
-        // 番号付きの視認性の高いカスタムマーカー配置
         shops.forEach((s, idx) => {
             if (s.lat && s.lng) {
                 const num = idx + 1;
@@ -1033,7 +1024,6 @@ GAME_HTML = """
     <script>
         let currentMode = 'genre';
 
-        // 全モードでLocalStorageから読み込み・保存を対応
         const wheelPresets = {
             genre: JSON.parse(localStorage.getItem('eatmap_roulette_genre') || '["焼肉 🥩", "居酒屋 🍺", "カフェ ☕", "ラーメン 🍜", "海鮮 🐟", "カレー 🍛", "イタリアン 🍕", "中華 🥟"]'),
             otokogi: JSON.parse(localStorage.getItem('eatmap_roulette_otokogi') || '["男気全額おごり！👑", "端数だけおごり！🪙", "次の店1杯ごちそう！🍻", "仲良くきっちり割り勘！🤝", "幹事さん半額免除！✨", "じゃんけんで再抽選！✊"]'),
@@ -1118,7 +1108,6 @@ GAME_HTML = """
             }, 4000);
         }
 
-        // 現在表示しているタブの項目を編集して保存
         function editItems() {
             const currentItems = wheelPresets[currentMode].join(', ');
             const str = prompt(`【${currentMode === 'genre' ? '店決め' : currentMode === 'otokogi' ? '男気おごり' : '二次会'}】\\nカンマ(,)区切りで項目を入力してください:`, currentItems);
@@ -1547,24 +1536,35 @@ def vote():
     clean_names = [html.escape(n.strip()) for n in names if n.strip()]
     return render_template_string(VOTE_HTML, shop_names=clean_names)
 
-# Gemini API 対話
+# Gemini API 対話（エラー詳細表示・確実認証版）
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     data = request.get_json(silent=True) or {}
     msg = html.escape(data.get('message', '')[:120])
-    if GEMINI_API_KEY and "ここに" not in GEMINI_API_KEY:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-            prompt = f"あなたは親しみやすいグルメコンシェルジュです。日本の飲食店選びの相談に答えてください。ユーザーの質問:「{msg}」。120文字以内で親切かつ簡潔に答えてください。"
-            payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
-            req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=5) as res:
-                res_data = json.loads(res.read().decode('utf-8'))
-                reply = res_data['candidates'][0]['content']['parts'][0]['text']
-                return jsonify({"reply": reply})
-        except Exception:
-            pass
-    return jsonify({"reply": f"「{msg}」ですね！ご予算やお好みに合わせたおすすめ店を検索タブからすぐにお探しいただけます。"})
+
+    if not GEMINI_API_KEY:
+        return jsonify({"reply": "【原因】RenderにGEMINI_API_KEYが設定されていません。"})
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        prompt = f"あなたは親しみやすいグルメコンシェルジュです。日本の飲食店選びの相談に答えてください。ユーザーの質問:「{msg}」。120文字以内で親切かつ簡潔に答えてください。"
+        payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
+
+        headers = {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': GEMINI_API_KEY
+        }
+        req = urllib.request.Request(url, data=payload, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as res:
+            res_data = json.loads(res.read().decode('utf-8'))
+            reply = res_data['candidates'][0]['content']['parts'][0]['text']
+            return jsonify({"reply": reply})
+
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode('utf-8', errors='ignore')
+        return jsonify({"reply": f"【Google APIエラー HTTP {e.code}】{err_body[:250]}"})
+    except Exception as e:
+        return jsonify({"reply": f"【システムエラー】{str(e)}"})
 
 @app.route('/manifest.json')
 def manifest():
@@ -1577,7 +1577,7 @@ def manifest():
 @app.route('/sw.js')
 def sw():
     sw_code = """
-    const CACHE_NAME = 'eatmap-v20';
+    const CACHE_NAME = 'eatmap-v21';
     self.addEventListener('install', e => self.skipWaiting());
     self.addEventListener('activate', e => e.waitUntil(
         caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k)))).then(() => self.clients.claim())
