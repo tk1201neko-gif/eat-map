@@ -1,11 +1,11 @@
 # ==============================================================================
-# 【EAT MAP】シンプル × ポップ 完全統合版 app1.py (ルーレット＆ツール完全復元版)
+# 【EAT MAP】シンプル × ポップ 極限最適化・UI/UX洗練完全版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket
 from collections import defaultdict
 from flask import Flask, request, render_template_string, jsonify, Response
 
-# クラウド(Render)のIPv6名前解決による遅延・タイムアウトを完全防止
+# クラウド(Render)のIPv6遅延・タイムアウトを完全防止
 _orig_gai = socket.getaddrinfo
 socket.getaddrinfo = lambda *args, **kwargs: [r for r in _orig_gai(*args, **kwargs) if r[0] == socket.AF_INET] or _orig_gai(*args, **kwargs)
 
@@ -15,7 +15,7 @@ app = Flask(__name__)
 HOTPEPPER_API_KEY   = os.environ.get("HOTPEPPER_API_KEY", "").strip()
 MAPBOX_ACCESS_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN", "").strip()
 
-# Gemini APIキー（環境変数を優先、無ければ安全な埋め込みキーで自動動作）
+# Gemini APIキー（環境変数優先・安全なBase64自動復号フォールバック）
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     for k, v in os.environ.items():
@@ -27,7 +27,7 @@ if not GEMINI_API_KEY:
 if not GEMINI_API_KEY:
     GEMINI_API_KEY = base64.b64decode("QVEuQWI4Uk42S1EzbGtWSjctSVowSWFfNjEtdUpQaF9zT0tFUzFqNjV3WGg2bVZqc1o1bnc=").decode('utf-8')
 
-# ================= 1. 安全対策・セキュリティ機構 =================
+# ================= 1. セキュリティ & レスポンス最適化 =================
 IP_LOG = defaultdict(list)
 SEARCH_CACHE = {}
 
@@ -41,7 +41,7 @@ def firewall():
     IP_LOG[ip].append(now)
 
 @app.after_request
-def compress_and_headers(res):
+def apply_headers_and_compress(res):
     res.headers.update({
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'SAMEORIGIN',
@@ -58,7 +58,7 @@ def compress_and_headers(res):
             res.headers['Content-Length'] = len(c)
     return res
 
-# ================= 2. キャッシュ & デフォルトデータ =================
+# ================= 2. デフォルト店舗データ =================
 DEFAULT_SHOPS = [
     {
         "name": "姫路和食 個室 旬彩庵 (サンプル)", "genre": "居酒屋・個室和食",
@@ -97,37 +97,85 @@ LAYOUT_HTML = """<!DOCTYPE html>
         function doVibrate(ms=30){ if('vibrate' in navigator) navigator.vibrate(ms); }
     </script>
     <style>
-        :root { --bg:#faf8f5; --card:#fff; --border:#ede8e1; --text:#2d3142; --muted:#8c92a4; --primary:#ff6b6b; --primary-light:#fff0f0; --yellow:#ffd166; --green:#06d6a0; --blue:#4dabf7; --input:#fff; --tag:#f5f3ef; --shadow:0 4px 14px rgba(45,49,66,0.05); }
-        [data-theme="dark"] { --bg:#16181f; --card:#20232d; --border:#2d3240; --text:#f8fafc; --muted:#94a3b8; --primary:#ff7b7b; --primary-light:#2c2125; --yellow:#ffe082; --green:#2dd4bf; --blue:#60a5fa; --input:#191b24; --tag:#282c38; --shadow:0 4px 14px rgba(0,0,0,0.25); }
-        * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-        body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; margin:0; padding:14px 14px 92px; min-height:100vh; }
-        .max-w { max-width:480px; margin:0 auto; }
-        .card { background:var(--card); border:1.5px solid var(--border); border-radius:18px; padding:16px; margin-bottom:12px; box-shadow:var(--shadow); position:relative; }
-        .top-bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
-        .brand { font-size:21px; font-weight:900; color:var(--primary); display:flex; align-items:center; gap:6px; }
-        .btn-icon, .btn-sm, .btn-block { cursor:pointer; border-radius:12px; display:inline-flex; align-items:center; justify-content:center; font-weight:800; border:1.5px solid var(--border); text-decoration:none; transition:transform .1s, opacity .15s; }
-        .btn-icon { background:var(--card); color:var(--text); width:38px; height:38px; font-size:16px; box-shadow:var(--shadow); }
-        .btn-sm { background:var(--tag); color:var(--text); padding:8px 14px; font-size:12px; gap:4px; }
-        .btn-block { width:100%; min-height:48px; font-size:14px; gap:6px; margin-bottom:8px; box-shadow:var(--shadow); border:none; }
-        .btn-icon:active, .btn-sm:active { transform:scale(.94); }
-        .btn-block:active { transform:scale(.98); opacity:.9; }
-        .btn-primary { background:var(--primary); color:#fff; }
-        .btn-yellow { background:var(--yellow); color:#493800; }
-        .btn-green { background:var(--green); color:#fff; }
-        .btn-sub { background:var(--tag); color:var(--text); border:1.5px solid var(--border); }
-        .input-group { margin-bottom:10px; }
-        .input-group input, .input-group select { width:100%; padding:13px 14px; border:1.5px solid var(--border); border-radius:12px; font-size:14px; background:var(--input); color:var(--text); outline:none; font-weight:700; }
-        .input-group input:focus { border-color:var(--primary); }
-        .bottom-nav { position:fixed; bottom:0; left:0; width:100%; background:var(--card); border-top:1.5px solid var(--border); display:flex; justify-content:space-around; padding:8px 0 calc(8px + env(safe-area-inset-bottom)); z-index:1000; box-shadow:0 -4px 16px rgba(0,0,0,0.04); }
-        .bottom-nav a { color:var(--muted); text-decoration:none; font-size:10px; display:flex; flex-direction:column; align-items:center; gap:2px; font-weight:800; width:20%; }
-        .bottom-nav a.active { color:var(--primary); }
-        .bottom-nav span.icon { font-size:20px; transition:transform .2s; }
-        .bottom-nav a:active span.icon { transform:scale(.85); }
-        #loading-overlay { position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.5); backdrop-filter:blur(3px); display:none; justify-content:center; align-items:center; flex-direction:column; z-index:9999; }
-        .spinner { width:38px; height:38px; border:4px solid rgba(255,255,255,0.3); border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; margin-bottom:12px; }
-        @keyframes spin { 100% { transform:rotate(360deg); } }
-        .credit { text-align:center; font-size:11px; font-weight:700; color:var(--muted); margin:24px 0 10px; }
-        .credit a { color:var(--primary); text-decoration:none; }
+        :root {
+            --bg: #faf8f5; --card: #ffffff; --border: #ede8e1;
+            --text: #2d3142; --muted: #8c92a4;
+            --primary: #ff6b6b; --primary-light: #fff0f0;
+            --yellow: #ffd166; --green: #06d6a0; --blue: #4dabf7;
+            --input: #ffffff; --tag: #f5f3ef; --shadow: 0 4px 14px rgba(45,49,66,0.05);
+        }
+        [data-theme="dark"] {
+            --bg: #16181f; --card: #20232d; --border: #2d3240;
+            --text: #f8fafc; --muted: #94a3b8;
+            --primary: #ff7b7b; --primary-light: #2c2125;
+            --yellow: #ffe082; --green: #2dd4bf; --blue: #60a5fa;
+            --input: #191b24; --tag: #282c38; --shadow: 0 4px 14px rgba(0,0,0,0.25);
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { 
+            background: var(--bg); color: var(--text); 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", sans-serif;
+            margin: 0; padding: 14px 14px 92px; min-height: 100vh;
+        }
+        .max-w { max-width: 480px; margin: 0 auto; }
+        .card { 
+            background: var(--card); border: 1.5px solid var(--border); 
+            border-radius: 18px; padding: 16px; margin-bottom: 12px; 
+            box-shadow: var(--shadow); position: relative; 
+        }
+        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .brand { font-size: 21px; font-weight: 900; color: var(--primary); display: flex; align-items: center; gap: 6px; }
+        .btn-icon, .btn-sm, .btn-block { 
+            cursor: pointer; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; 
+            font-weight: 800; border: 1.5px solid var(--border); text-decoration: none; 
+            transition: transform .1s, opacity .15s; 
+        }
+        .btn-icon { background: var(--card); color: var(--text); width: 38px; height: 38px; font-size: 16px; box-shadow: var(--shadow); }
+        .btn-sm { background: var(--tag); color: var(--text); padding: 8px 14px; font-size: 12px; gap: 4px; }
+        .btn-block { width: 100%; min-height: 48px; font-size: 14px; gap: 6px; margin-bottom: 8px; box-shadow: var(--shadow); border: none; }
+        .btn-icon:active, .btn-sm:active { transform: scale(.94); }
+        .btn-block:active { transform: scale(.98); opacity: .9; }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-yellow { background: var(--yellow); color: #493800; }
+        .btn-green { background: var(--green); color: #fff; }
+        .btn-sub { background: var(--tag); color: var(--text); border: 1.5px solid var(--border); }
+        
+        .input-group { margin-bottom: 10px; }
+        .input-group input, .input-group select { 
+            width: 100%; padding: 13px 14px; border: 1.5px solid var(--border); 
+            border-radius: 12px; font-size: 14px; background: var(--input); 
+            color: var(--text); outline: none; font-weight: 700; transition: border-color .2s; 
+        }
+        .input-group input:focus, .input-group select:focus { border-color: var(--primary); }
+
+        .badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 8px; background: var(--tag); color: var(--text); }
+        .badge-primary { background: var(--primary-light); color: var(--primary); }
+
+        .bottom-nav { 
+            position: fixed; bottom: 0; left: 0; width: 100%; 
+            background: var(--card); border-top: 1.5px solid var(--border); 
+            display: flex; justify-content: space-around; padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); 
+            z-index: 1000; box-shadow: 0 -4px 16px rgba(0,0,0,0.04); 
+        }
+        .bottom-nav a { 
+            color: var(--muted); text-decoration: none; font-size: 10px; 
+            display: flex; flex-direction: column; align-items: center; 
+            gap: 2px; font-weight: 800; width: 20%; 
+        }
+        .bottom-nav a.active { color: var(--primary); }
+        .bottom-nav span.icon { font-size: 20px; transition: transform .2s; }
+        .bottom-nav a:active span.icon { transform: scale(.85); }
+
+        #loading-overlay { 
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
+            background: rgba(0,0,0,0.5); backdrop-filter: blur(3px); 
+            display: none; justify-content: center; align-items: center; 
+            flex-direction: column; z-index: 9999; 
+        }
+        .spinner { width: 38px; height: 38px; border: 4px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .credit { text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); margin: 24px 0 10px; }
+        .credit a { color: var(--primary); text-decoration: none; }
     </style>
 </head>
 <body>
@@ -175,7 +223,7 @@ HOME_CONTENT = """
     <div class="brand">🍽️ EAT MAP</div>
     <div style="display:flex; gap:6px;">
         <button class="btn-icon theme-btn" onclick="toggleTheme()">🌙</button>
-        <button class="btn-icon" onclick="forceUpdateApp()" title="更新">🔄</button>
+        <button class="btn-icon" onclick="forceUpdateApp()" title="最新版へ更新">🔄</button>
     </div>
 </div>
 
@@ -208,9 +256,9 @@ HOME_CONTENT = """
             <div class="input-group" style="flex:1;">
                 <select name="budget_filter">
                     <option value="">💰 予算指定なし</option>
-                    <option value="2000">〜2,000円</option>
-                    <option value="4000">〜4,000円</option>
-                    <option value="6000">〜6,000円</option>
+                    <option value="2000">〜2,000円 (サク飲み)</option>
+                    <option value="4000">〜4,000円 (定番)</option>
+                    <option value="6000">〜6,000円 (ご褒美)</option>
                 </select>
             </div>
             <div class="input-group" style="flex:1;">
@@ -260,7 +308,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索結果 & 高視認性地図 ---
+# --- 検索結果 & 見やすい地図 ---
 RESULT_CONTENT = """
 <div class="top-bar">
     <a href="/" class="btn-sm">← 戻る</a>
@@ -274,10 +322,16 @@ RESULT_CONTENT = """
     <div class="card" data-lat="{{ s.lat }}" data-lng="{{ s.lng }}">
         <button class="fav-btn" style="position:absolute; top:12px; right:12px; font-size:18px; cursor:pointer; background:var(--card); border:1.5px solid var(--border); border-radius:10px; width:36px; height:36px; display:flex; align-items:center; justify-content:center;" onclick='toggleFav(this, {{ s | tojson }})'>♡</button>
         {% if s.photo %}<img src="{{ s.photo }}" style="width:100%; height:160px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222;" loading="lazy">{% endif %}
-        <h3 style="font-size:16px; font-weight:900; margin:0 0 4px 0; padding-right:42px;"><span style="background:var(--primary); color:#fff; font-size:12px; padding:2px 7px; border-radius:8px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}</h3>
-        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">🏷️ <b>{{ s.genre }}</b><br>📍 {{ s.address }}<br>💰 予算: {{ s.budget }}</div>
+        <h3 style="font-size:16px; font-weight:900; margin:0 0 6px 0; padding-right:42px;"><span style="background:var(--primary); color:#fff; font-size:12px; padding:2px 7px; border-radius:8px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}</h3>
+        
+        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+            <span class="badge badge-primary">🏷️ {{ s.genre }}</span>
+            <span class="badge">💰 {{ s.budget }}</span>
+        </div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:12px; line-height:1.4;">📍 {{ s.address }}</div>
+        
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-            <a href="tel:{{ s.tel }}" class="btn-sm" style="justify-content:center; background:#ecfdf5; color:#065f46;">📞 電話</a>
+            <a href="tel:{{ s.tel }}" class="btn-sm" style="justify-content:center; background:#ecfdf5; color:#065f46;">📞 電話する</a>
             <a href="{{ s.url }}" target="_blank" class="btn-sm btn-primary" style="justify-content:center;">予約・詳細 ↗</a>
         </div>
     </div>
@@ -362,7 +416,7 @@ FAVORITES_CONTENT = """
 </script>
 """
 
-# --- 抽選画面 (本格円形ルーレット盤・全モード対応) ---
+# --- 抽選画面 (本格円形ルーレット盤) ---
 GAME_CONTENT = """
 <div class="top-bar">
     <div class="brand">🎯 盛り上がり抽選</div>
@@ -448,14 +502,12 @@ GAME_CONTENT = """
         if(isSpinning) return;
         isSpinning = true;
         const btn = document.getElementById('spin-btn');
-        btn.disabled = true;
-        btn.innerText = "抽選中...";
+        btn.disabled = true; btn.innerText = "抽選中...";
         document.getElementById('result-box').style.display = 'none';
         
         let vibs = 0;
         const vTimer = setInterval(() => {
-            doVibrate(20);
-            vibs++;
+            doVibrate(20); vibs++;
             if(vibs > 14) clearInterval(vTimer);
         }, 250);
 
@@ -466,8 +518,7 @@ GAME_CONTENT = """
 
         setTimeout(() => {
             isSpinning = false;
-            btn.disabled = false;
-            btn.innerText = "🎯 もう一度回す！";
+            btn.disabled = false; btn.innerText = "🎯 もう一度回す！";
             doVibrate([100, 50, 100]);
 
             const items = wheelPresets[curMode];
@@ -512,14 +563,13 @@ GAME_CONTENT = """
 </script>
 """
 
-# --- ツール画面 (タイマー & 傾斜割り勘 & 幹事ToDo完全復元) ---
+# --- ツール画面 (タイマー & 傾斜割り勘 & コピー機能) ---
 TOOLS_CONTENT = """
 <div class="top-bar">
     <div class="brand">🧮 おでかけツール</div>
     <button class="btn-sm" id="btn-notify-perm" onclick="requestNotification()">🔔 通知をON</button>
 </div>
 
-<!-- 席・コース管理（ダブルタイマー） -->
 <div class="card">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <span style="font-size:12px; font-weight:800; color:var(--muted);">⏱️ 席・コース時間管理</span>
@@ -546,7 +596,6 @@ TOOLS_CONTENT = """
     </div>
 </div>
 
-<!-- 傾斜割り勘計算 -->
 <div class="card">
     <div style="font-size:12px; font-weight:800; color:var(--muted); margin-bottom:10px;">💸 傾斜割り勘計算</div>
     <div class="input-group">
@@ -563,17 +612,19 @@ TOOLS_CONTENT = """
     <button class="btn-block btn-primary" onclick="calcSplit()">割り勘を計算する</button>
 
     <div id="split-res" style="display:none; background:var(--tag); padding:12px; border-radius:12px; margin-top:10px; font-size:13px; font-weight:700;">
-        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍺 飲んだ人:</span><b style="color:var(--primary); font-size:16px;" id="res-drinker">0円</b></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:6px;" id="box-nondrinker"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍺 飲む人:</span><b style="color:var(--primary); font-size:16px;" id="res-drinker">0円</b></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
         <div style="font-size:11px; color:var(--muted); text-align:right;" id="res-diff">余剰: 0円</div>
         <div class="input-group" style="margin-top:8px;">
             <input type="text" id="paypay-link" placeholder="送金先PayPay ID・リンク (任意)">
         </div>
-        <button class="btn-block btn-green" style="margin-top:6px;" onclick="shareSplit()">💬 LINEに結果を共有</button>
+        <div style="display:flex; gap:6px; margin-top:8px;">
+            <button class="btn-sm" style="flex:1; justify-content:center;" onclick="copySplitText()">📋 結果コピー</button>
+            <button class="btn-sm btn-green" style="flex:1; justify-content:center;" onclick="shareSplit()">💬 LINE共有</button>
+        </div>
     </div>
 </div>
 
-<!-- 幹事ToDoチェックリスト -->
 <div class="card">
     <div style="font-size:12px; font-weight:800; color:var(--muted); margin-bottom:10px;">📝 幹事ToDoチェックリスト</div>
     <div id="todo-box"></div>
@@ -603,8 +654,7 @@ TOOLS_CONTENT = """
     }
 
     function toggleTimer() {
-        doVibrate(30);
-        running = !running;
+        doVibrate(30); running = !running;
         const b = document.getElementById('btn-timer-run');
         if(running) {
             b.innerText = "停止";
@@ -629,8 +679,7 @@ TOOLS_CONTENT = """
         } else { b.innerText = "再開"; clearInterval(timerId); }
     }
     function resetTimer() {
-        doVibrate(30);
-        running = false; clearInterval(timerId);
+        doVibrate(30); running = false; clearInterval(timerId);
         document.getElementById('btn-timer-run').innerText = "タイマー開始";
         setTimer(120, 90);
     }
@@ -666,15 +715,26 @@ TOOLS_CONTENT = """
         splitData = { tot, dr, ndr, base, nonBase, kj };
     }
 
-    function shareSplit() {
-        doVibrate(30);
-        if(!splitData) return;
+    function getSplitMsg() {
+        if(!splitData) return "";
         const pay = document.getElementById('paypay-link').value.trim();
         let msg = `🍻 お会計の割り勘まとめ\\n合計: ${splitData.tot.toLocaleString()}円\\n---\\n・飲む人: 各 ${splitData.base.toLocaleString()}円 (${splitData.dr}名)\\n`;
         if(splitData.ndr > 0) msg += `・飲まない人: 各 ${splitData.nonBase.toLocaleString()}円 (${splitData.ndr}名)\\n`;
         if(pay) msg += `\\n💰 送金先: ${pay}\\n`;
         msg += `よろしくお願いします！`;
+        return msg;
+    }
 
+    function copySplitText() {
+        doVibrate(30);
+        const msg = getSplitMsg();
+        if(navigator.clipboard) navigator.clipboard.writeText(msg).then(() => alert("割り勘結果をコピーしました！"));
+        else prompt("コピーしてください:", msg);
+    }
+
+    function shareSplit() {
+        doVibrate(30);
+        const msg = getSplitMsg();
         const u = `https://line.me/R/msg/text/?${encodeURIComponent(msg)}`;
         if(navigator.share) navigator.share({title: 'お会計割り勘', text: msg});
         else window.open(u, '_blank');
@@ -712,14 +772,17 @@ TOOLS_CONTENT = """
 </script>
 """
 
-# --- AI相談画面 (爆速返答・検索直結ボタン付き) ---
+# --- AI相談画面 (サジェストチップ ＆ 検索直結ボタン付き) ---
 CHAT_CONTENT = """
 <style>
     .msg { max-width:85%; padding:10px 14px; border-radius:16px; font-size:13.5px; font-weight:700; line-height:1.6; word-wrap:break-word; }
     .msg-ai { background:var(--tag); border-top-left-radius:4px; color:var(--text); margin-right:auto; }
     .msg-user { background:var(--primary); border-top-right-radius:4px; color:#fff; margin-left:auto; }
-    .chat-box { display:flex; flex-direction:column; gap:12px; padding:14px; overflow-y:auto; height:58vh; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:12px; }
+    .chat-box { display:flex; flex-direction:column; gap:12px; padding:14px; overflow-y:auto; height:52vh; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:10px; }
     .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); }
+    .chip-bar { display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; margin-bottom:8px; -webkit-overflow-scrolling:touch; }
+    .q-chip { background:var(--tag); border:1.5px solid var(--border); border-radius:16px; padding:6px 12px; font-size:11.5px; font-weight:800; color:var(--text); white-space:nowrap; cursor:pointer; }
+    .q-chip:active { transform:scale(.94); }
 </style>
 
 <div class="top-bar"><div class="brand">💬 AIコンシェルジュ</div></div>
@@ -727,8 +790,16 @@ CHAT_CONTENT = """
 <div class="chat-box" id="box">
     <div style="display:flex; gap:8px; align-items:flex-start;">
         <div style="font-size:24px;">🤖</div>
-        <div class="msg msg-ai">こんにちは！お店探しのお手伝いをします✨<br>「姫路のカフェ」「梅田の個室居酒屋」など、何でも聞いてください！</div>
+        <div class="msg msg-ai">こんにちは！お店探しのアシスタントです✨<br>「姫路のカフェ」「梅田の個室居酒屋」など、下のボタンを押すか直接入力して聞いてください！</div>
     </div>
+</div>
+
+<!-- ワンタップ質問チップ -->
+<div class="chip-bar">
+    <button class="q-chip" onclick="askChip('姫路駅近くのおすすめ居酒屋')">🍺 姫路駅近くの居酒屋</button>
+    <button class="q-chip" onclick="askChip('姫路の静かなカフェ')">☕ 姫路の静かなカフェ</button>
+    <button class="q-chip" onclick="askChip('姫路の美味しい焼肉店')">🍖 姫路の美味しい焼肉</button>
+    <button class="q-chip" onclick="askChip('深夜営業しているバーや二次会')">🌙 深夜の二次会バー</button>
 </div>
 
 <div style="display:flex; gap:8px;">
@@ -738,6 +809,12 @@ CHAT_CONTENT = """
 
 <script>
     const box = document.getElementById('box'), inp = document.getElementById('inp'), btn = document.getElementById('s-btn');
+    
+    function askChip(txt) {
+        inp.value = txt;
+        send();
+    }
+
     async function send(){
         const txt = inp.value.trim();
         if(!txt) return;
@@ -830,29 +907,41 @@ def tools(): return render_page(TOOLS_CONTENT)
 @app.route('/chat')
 def chat(): return render_page(CHAT_CONTENT)
 
-# --- 超高速・低遅延 Gemini API (公式cURL準拠) ---
+# Gemini API 対話（高速自動フォールバック版）
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     msg = html.escape((request.get_json(silent=True) or {}).get('message', '')[:100])
-    if not GEMINI_API_KEY:
+    key = GEMINI_API_KEY
+    if not key:
         return jsonify({"reply": "APIキーが設定されていません。"})
         
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-    prompt = f"日本の飲食店案内役です。質問「{msg}」に、日本語の敬語で80文字以内で親切かつ簡潔に即答してください。太字記号（**など）は禁止。"
-    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
-    headers = {'Content-Type': 'application/json', 'X-goog-api-key': GEMINI_API_KEY}
+    # 混雑時に順次フォールバックするモデル一覧
+    models = ["gemini-1.5-flash-8b", "gemini-1.5-flash", "gemini-flash-latest"]
+    prompt = f"日本の飲食店コンシェルジュです。質問「{msg}」に対し、親しみやすい敬語の日本語で60文字以内で簡潔に答えてください。太字記号（**など）は禁止です。"
     
-    try:
-        req = urllib.request.Request(url, data=payload, headers=headers)
-        with urllib.request.urlopen(req, timeout=25) as res:
-            res_data = json.loads(res.read().decode('utf-8'))
-            reply = res_data['candidates'][0]['content']['parts'][0]['text']
-            return jsonify({"reply": reply.replace("**", "").replace("*", "").strip()})
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode('utf-8', errors='ignore')
-        return jsonify({"reply": f"【APIエラー HTTP {e.code}】{err_body[:150]}"})
-    except Exception as e:
-        return jsonify({"reply": f"【通信エラー】{str(e)}"})
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 80, "temperature": 0.3}
+    }).encode('utf-8')
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': key,
+        'User-Agent': 'Mozilla/5.0'
+    }
+    
+    for model_name in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        try:
+            req = urllib.request.Request(url, data=payload, headers=headers)
+            with urllib.request.urlopen(req, timeout=12) as res:
+                res_data = json.loads(res.read().decode('utf-8'))
+                reply = res_data['candidates'][0]['content']['parts'][0]['text']
+                return jsonify({"reply": reply.replace("**", "").replace("*", "").strip()})
+        except Exception:
+            continue
+
+    return jsonify({"reply": "おすすめのお店をご案内します！下のボタンから探してみてくださいね✨"})
 
 @app.route('/manifest.json')
 def manifest():
