@@ -1,16 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】シンプル × ポップ 完全統合版 app1.py (エラー詳細表示版)
-# ------------------------------------------------------------------------------
-# ■ 組み込み機能:
-#   - 見やすい地図システム (高視認性Voyager / リアル航空写真 / 全画面拡大 / 番号付きピン)
-#   - ホットペッパーグルメAPI (実店舗検索) & Gemini API (AI対話) & Mapbox対応
-#   - Open-Meteo 天気API連動 (雨天自動検知)
-#   - 3大ルーレット (店決め / 男気おごり / 二次会判定) ★全て項目編集＆保存可能
-#   - 電話確認用セリフカンペ機能
-#   - バイブレーション (Vibration API) & タイマーWeb通知 (Notification API)
-#   - こだわり・除外フィルター (禁煙・生魚除外・辛さ除外)
-#   - 傾斜割り勘 / 幹事ToDo / 全国制覇47都道府県マイデータ
-#   - レートリミット / セキュリティヘッダー / Gzip圧縮 / 死活監視 / PWA対応
+# 【EAT MAP】シンプル × ポップ 完全統合版 app1.py (公式cURL準拠・安全動作版)
 # ==============================================================================
 import os
 import urllib.request
@@ -26,10 +15,10 @@ from flask import Flask, request, render_template_string, jsonify, Response
 
 app = Flask(__name__)
 
-# 環境変数から読み込み（GitHubのシークレットスキャン対策済み）
+# --- APIキーの設定（Renderの環境変数から安全に取得） ---
 HOTPEPPER_API_KEY   = os.environ.get("HOTPEPPER_API_KEY", "").strip()
-GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "").strip()
 MAPBOX_ACCESS_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN", "").strip()
+GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "").strip()
 
 # ================= 1. 安全対策・セキュリティ機構 =================
 IP_REQUEST_LOG = defaultdict(list)
@@ -53,7 +42,7 @@ def apply_security_headers_and_compress(response):
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-
+    
     if response.content_type and 'text/html' in response.content_type:
         response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
@@ -99,7 +88,7 @@ DEFAULT_SHOPS = [
     }
 ]
 
-# ================= 3. デザイン基盤 (ポップ＆シンプル) =================
+# ================= 3. デザイン基盤 =================
 COMMON_HEAD = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -150,13 +139,13 @@ COMMON_HEAD = """
             --shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
         }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body {
-            background-color: var(--bg); color: var(--text-main);
+        body { 
+            background-color: var(--bg); color: var(--text-main); 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", sans-serif;
             margin: 0; padding: 14px; padding-bottom: 92px; min-height: 100vh;
         }
         .max-w { max-width: 480px; margin: 0 auto; }
-
+        
         .card {
             background: var(--card-bg); border: 1.5px solid var(--card-border);
             border-radius: 18px; padding: 16px; margin-bottom: 12px;
@@ -164,7 +153,7 @@ COMMON_HEAD = """
         }
         .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .brand { font-size: 21px; font-weight: 900; letter-spacing: 0.5px; color: var(--primary); display: flex; align-items: center; gap: 6px; }
-
+        
         .btn-icon {
             background: var(--card-bg); border: 1.5px solid var(--card-border);
             color: var(--text-main); border-radius: 12px; width: 38px; height: 38px;
@@ -201,16 +190,16 @@ COMMON_HEAD = """
         }
         .input-group input:focus, .input-group select:focus { border-color: var(--primary); }
 
-        .bottom-nav {
-            position: fixed; bottom: 0; left: 0; width: 100%;
+        .bottom-nav { 
+            position: fixed; bottom: 0; left: 0; width: 100%; 
             background: var(--card-bg); border-top: 1.5px solid var(--card-border);
             display: flex; justify-content: space-around; padding: 8px 0;
             padding-bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 1000;
             box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.04);
         }
-        .bottom-nav a {
-            color: var(--text-muted); text-decoration: none; font-size: 10px; display: flex; flex-direction: column;
-            align-items: center; gap: 2px; font-weight: 800; width: 20%;
+        .bottom-nav a { 
+            color: var(--text-muted); text-decoration: none; font-size: 10px; display: flex; flex-direction: column; 
+            align-items: center; gap: 2px; font-weight: 800; width: 20%; 
         }
         .bottom-nav a.active { color: var(--primary); }
         .bottom-nav span.icon { font-size: 20px; }
@@ -223,7 +212,7 @@ COMMON_HEAD = """
         .shop-img { width: 100%; height: 165px; object-fit: cover; border-radius: 12px; margin-bottom: 10px; background: #222; }
         .shop-title { font-size: 16px; font-weight: 900; margin: 0 0 4px 0; padding-right: 42px; color: var(--text-main); }
         .shop-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; }
-
+        
         .fav-btn {
             position: absolute; top: 12px; right: 12px; font-size: 18px; cursor: pointer;
             background: var(--card-bg); border: 1.5px solid var(--card-border); border-radius: 10px;
@@ -312,7 +301,7 @@ HOME_HTML = """
 </head>
 <body>
     <div id="loading-overlay"><div class="spinner"></div><div style="color:white; font-size:14px; font-weight:800;">おいしいお店を探し中...</div></div>
-
+    
     <div class="max-w">
         <div class="top-bar">
             <div class="brand">🍽️ EAT MAP</div>
@@ -355,7 +344,7 @@ HOME_HTML = """
                 <div class="input-group">
                     <input type="text" name="keyword" id="keyword-input" placeholder="🔍 キーワード (例: 個室, 飲み放題, 焼き鳥)">
                 </div>
-
+                
                 <div style="display:flex; gap:8px;">
                     <div class="input-group" style="flex:1;">
                         <select name="budget_filter">
@@ -445,7 +434,7 @@ HOME_HTML = """
                         const banner = document.getElementById('weather-banner');
                         banner.style.display = 'flex';
                         document.getElementById('weather-sub').innerText = `現在地付近の気温: ${temp}℃`;
-
+                        
                         if (isRain) {
                             document.getElementById('weather-icon').innerText = '🌧️';
                             document.getElementById('weather-text').innerText = '現在、雨が降っています';
@@ -477,7 +466,7 @@ HOME_HTML = """
 </html>
 """
 
-# --- 画面2: 検索結果 & 見やすい高機能地図 ---
+# --- 画面2: 検索結果 & 高視認性地図 ---
 RESULT_HTML = """
 <!DOCTYPE html>
 <html lang="ja">
@@ -487,7 +476,7 @@ RESULT_HTML = """
     <style>
         .map-wrapper { position: relative; width: 100%; margin-bottom: 12px; }
         .map-box { height: 230px; width: 100%; border-radius: 16px; border: 1.5px solid var(--card-border); transition: all 0.25s ease; box-shadow: var(--shadow); }
-
+        
         .map-box.is-fullscreen {
             position: fixed !important; top: 0 !important; left: 0 !important;
             width: 100vw !important; height: 100vh !important;
@@ -528,7 +517,7 @@ RESULT_HTML = """
 
         <div class="map-wrapper" id="map-wrap">
             <div id="map" class="map-box"></div>
-
+            
             <div class="map-controls-bar">
                 <button class="map-float-btn" onclick="toggleMapType()" id="btn-map-type">🛰️ 写真</button>
                 <button class="map-float-btn" onclick="locateMe()">📍 現在地</button>
@@ -579,7 +568,7 @@ RESULT_HTML = """
         <div class="modal-body">
             <h3 style="font-size:16px; margin:0 0 10px 0; color:var(--primary);">📞 お店への電話確認カンペ</h3>
             <div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;" id="modal-shop-name">店舗名</div>
-
+            
             <div style="background:var(--tag-bg); padding:12px; border-radius:12px; font-size:13px; font-weight:700; line-height:1.6; border-left:3px solid var(--accent-green); margin-bottom:14px;">
                 「お電話ありがとうございます。<br>本日<b style="color:var(--primary);" id="script-people">2名</b>なのですが、今からお席は空いていますでしょうか？（個室かテーブル席希望です）」
             </div>
@@ -703,7 +692,7 @@ RESULT_HTML = """
             navigator.geolocation.getCurrentPosition(pos => {
                 const myLat = pos.coords.latitude, myLng = pos.coords.longitude;
                 const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${myLng},${myLat};${destLng},${destLat}?geometries=geojson&access_token=${mapboxToken}`;
-
+                
                 fetch(url)
                     .then(res => res.json())
                     .then(data => {
@@ -870,7 +859,7 @@ FAVORITES_HTML = """
         function renderFavs() {
             const list = document.getElementById('fav-container');
             const favs = JSON.parse(localStorage.getItem('eatmap_favs') || '[]');
-
+            
             const visitedSet = new Set();
             favs.forEach(s => {
                 s.pref = getPref(s.address);
@@ -978,7 +967,7 @@ FAVORITES_HTML = """
 </html>
 """
 
-# --- 画面4: 抽選（3大ルーレット ★全て編集対応） ---
+# --- 画面4: 抽選（3大ルーレット） ---
 GAME_HTML = """
 <!DOCTYPE html>
 <html lang="ja">
@@ -1023,7 +1012,7 @@ GAME_HTML = """
 
     <script>
         let currentMode = 'genre';
-
+        
         const wheelPresets = {
             genre: JSON.parse(localStorage.getItem('eatmap_roulette_genre') || '["焼肉 🥩", "居酒屋 🍺", "カフェ ☕", "ラーメン 🍜", "海鮮 🐟", "カレー 🍛", "イタリアン 🍕", "中華 🥟"]'),
             otokogi: JSON.parse(localStorage.getItem('eatmap_roulette_otokogi') || '["男気全額おごり！👑", "端数だけおごり！🪙", "次の店1杯ごちそう！🍻", "仲良くきっちり割り勘！🤝", "幹事さん半額免除！✨", "じゃんけんで再抽選！✊"]'),
@@ -1094,7 +1083,7 @@ GAME_HTML = """
                 const step = 360 / items.length;
                 const idx = Math.floor((360 - deg + 270) % 360 / step);
                 const picked = items[idx];
-
+                
                 document.getElementById('result-label').innerText = picked;
                 const sBtn = document.getElementById('search-decided-btn');
                 if (currentMode === 'genre') {
@@ -1118,8 +1107,8 @@ GAME_HTML = """
                     localStorage.setItem(`eatmap_roulette_${currentMode}`, JSON.stringify(arr));
                     drawWheel();
                     alert("項目を保存しました！");
-                } else {
-                    alert("ルーレットを回すには2項目以上必要です。");
+                } else { 
+                    alert("ルーレットを回すには2項目以上必要です。"); 
                 }
             }
         }
@@ -1128,7 +1117,7 @@ GAME_HTML = """
 </html>
 """
 
-# --- 画面5: ツール (ダブルタイマー & 通知 & 傾斜割り勘 & チェックリスト) ---
+# --- 画面5: ツール (タイマー & 傾斜割り勘) ---
 TOOLS_HTML = """
 <!DOCTYPE html>
 <html lang="ja">
@@ -1214,7 +1203,7 @@ TOOLS_HTML = """
 
         let exitSec = 7200, loSec = 5400, timerId = null, running = false;
         function setTimer(ex, lo) { exitSec = ex * 60; loSec = lo * 60; updateTimerUI(); }
-
+        
         function requestNotification() {
             if (!("Notification" in window)) return alert("この端末は通知に非対応です");
             Notification.requestPermission().then(perm => {
@@ -1234,7 +1223,7 @@ TOOLS_HTML = """
                 timerId = setInterval(() => {
                     if(exitSec > 0) exitSec--;
                     if(loSec > 0) loSec--;
-
+                    
                     if (loSec === 0) {
                         doVibrate([200, 100, 200]);
                         if ("Notification" in window && Notification.permission === "granted") {
@@ -1425,7 +1414,7 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, budget_filter="", peopl
     people = html.escape(people[:20])
     cache_key = f"{area}:{keyword}:{lat}:{lng}:{budget_filter}:{people}:{opt_nosmoke}:{opt_nofish}:{opt_nospicy}"
     now = time.time()
-
+    
     if cache_key in SEARCH_CACHE:
         c_time, c_data = SEARCH_CACHE[cache_key]
         if now - c_time < CACHE_TTL:
@@ -1459,7 +1448,7 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, budget_filter="", peopl
             for s in data.get("results", {}).get("shop", []):
                 b_str = (s.get("budget") or {}).get("name", "")
                 genre_name = (s.get("genre") or {}).get("name", "グルメ")
-
+                
                 if opt_nofish and ("海鮮" in genre_name or "魚" in genre_name or "寿司" in genre_name):
                     continue
                 if opt_nospicy and ("韓国" in genre_name or "四川" in genre_name or "タイ" in genre_name):
@@ -1489,7 +1478,6 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, budget_filter="", peopl
     except Exception:
         return shops
 
-# UptimeRobot死活監視用
 @app.route('/ping')
 def ping():
     return "OK", 200
@@ -1536,30 +1524,32 @@ def vote():
     clean_names = [html.escape(n.strip()) for n in names if n.strip()]
     return render_template_string(VOTE_HTML, shop_names=clean_names)
 
-# Gemini API 対話（エラー詳細表示・確実認証版）
+# Gemini API 対話（公式cURL仕様：URLパラメータ不使用・X-goog-api-keyヘッダー認証版）
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     data = request.get_json(silent=True) or {}
     msg = html.escape(data.get('message', '')[:120])
-
-    if not GEMINI_API_KEY:
-        return jsonify({"reply": "【原因】RenderにGEMINI_API_KEYが設定されていません。"})
-
+    
+    key = GEMINI_API_KEY
+    if not key:
+        return jsonify({"reply": "【原因】GEMINI_API_KEYが設定されていません。"})
+        
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # 公式cURLに完全準拠（URLにkeyパラメータは付けない）
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
         prompt = f"あなたは親しみやすいグルメコンシェルジュです。日本の飲食店選びの相談に答えてください。ユーザーの質問:「{msg}」。120文字以内で親切かつ簡潔に答えてください。"
         payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
-
+        
         headers = {
             'Content-Type': 'application/json',
-            'x-goog-api-key': GEMINI_API_KEY
+            'X-goog-api-key': key
         }
         req = urllib.request.Request(url, data=payload, headers=headers)
-        with urllib.request.urlopen(req, timeout=8) as res:
+        with urllib.request.urlopen(req, timeout=10) as res:
             res_data = json.loads(res.read().decode('utf-8'))
             reply = res_data['candidates'][0]['content']['parts'][0]['text']
             return jsonify({"reply": reply})
-
+            
     except urllib.error.HTTPError as e:
         err_body = e.read().decode('utf-8', errors='ignore')
         return jsonify({"reply": f"【Google APIエラー HTTP {e.code}】{err_body[:250]}"})
@@ -1577,7 +1567,7 @@ def manifest():
 @app.route('/sw.js')
 def sw():
     sw_code = """
-    const CACHE_NAME = 'eatmap-v21';
+    const CACHE_NAME = 'eatmap-v24';
     self.addEventListener('install', e => self.skipWaiting());
     self.addEventListener('activate', e => e.waitUntil(
         caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k)))).then(() => self.clients.claim())
