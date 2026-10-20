@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】シンプル × ポップ 極限最適化・最軽量完全版 app1.py
+# 【EAT MAP】シンプル × ポップ 完全統合版 app1.py (ルーレット＆ツール完全復元版)
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket
 from collections import defaultdict
@@ -11,14 +11,23 @@ socket.getaddrinfo = lambda *args, **kwargs: [r for r in _orig_gai(*args, **kwar
 
 app = Flask(__name__)
 
-# --- APIキー（環境変数を優先し、安全な埋め込みキーで即動作） ---
+# --- APIキーの設定 ---
 HOTPEPPER_API_KEY   = os.environ.get("HOTPEPPER_API_KEY", "").strip()
 MAPBOX_ACCESS_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN", "").strip()
-GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "").strip()
+
+# Gemini APIキー（環境変数を優先、無ければ安全な埋め込みキーで自動動作）
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+if not GEMINI_API_KEY:
+    for k, v in os.environ.items():
+        if "GEMINI" in k.upper() or "EAT" in k.upper():
+            if v.startswith("AQ."):
+                GEMINI_API_KEY = v.strip()
+                break
+
 if not GEMINI_API_KEY:
     GEMINI_API_KEY = base64.b64decode("QVEuQWI4Uk42S1EzbGtWSjctSVowSWFfNjEtdUpQaF9zT0tFUzFqNjV3WGg2bVZqc1o1bnc=").decode('utf-8')
 
-# ================= 1. 軽量レートリミット & レスポンス最適化 =================
+# ================= 1. 安全対策・セキュリティ機構 =================
 IP_LOG = defaultdict(list)
 SEARCH_CACHE = {}
 
@@ -49,7 +58,29 @@ def compress_and_headers(res):
             res.headers['Content-Length'] = len(c)
     return res
 
-# ================= 2. 共通ベーステンプレート (単一統合構造) =================
+# ================= 2. キャッシュ & デフォルトデータ =================
+DEFAULT_SHOPS = [
+    {
+        "name": "姫路和食 個室 旬彩庵 (サンプル)", "genre": "居酒屋・個室和食",
+        "address": "兵庫県姫路市駅前町100", "budget": "3,500円〜5,000円", "min_budget": 3500,
+        "lat": 34.8290, "lng": 134.6900, "tel": "079-000-0002",
+        "photo": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600", "url": "https://www.hotpepper.jp/"
+    },
+    {
+        "name": "CAFÉ DE ÉTOILE (サンプル)", "genre": "カフェ・スイーツ",
+        "address": "兵庫県姫路市本町68", "budget": "1,000円〜2,000円", "min_budget": 1000,
+        "lat": 34.8340, "lng": 134.6930, "tel": "079-000-0001",
+        "photo": "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=600", "url": "https://www.hotpepper.jp/"
+    },
+    {
+        "name": "深夜営業 BAR 夜行列車 (サンプル)", "genre": "バー・お酒",
+        "address": "兵庫県姫路市魚町1-1", "budget": "2,000円〜3,500円", "min_budget": 2000,
+        "lat": 34.8315, "lng": 134.6880, "tel": "079-000-0003",
+        "photo": "https://images.unsplash.com/photo-1514933651103-005eec06c04b?w=600", "url": "https://www.hotpepper.jp/"
+    }
+]
+
+# ================= 3. 共通ベーステンプレート =================
 LAYOUT_HTML = """<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -66,8 +97,8 @@ LAYOUT_HTML = """<!DOCTYPE html>
         function doVibrate(ms=30){ if('vibrate' in navigator) navigator.vibrate(ms); }
     </script>
     <style>
-        :root { --bg:#faf8f5; --card:#fff; --border:#ede8e1; --text:#2d3142; --muted:#8c92a4; --primary:#ff6b6b; --yellow:#ffd166; --green:#06d6a0; --blue:#4dabf7; --input:#fff; --tag:#f5f3ef; --shadow:0 4px 14px rgba(45,49,66,0.05); }
-        [data-theme="dark"] { --bg:#16181f; --card:#20232d; --border:#2d3240; --text:#f8fafc; --muted:#94a3b8; --primary:#ff7b7b; --yellow:#ffe082; --green:#2dd4bf; --blue:#60a5fa; --input:#191b24; --tag:#282c38; --shadow:0 4px 14px rgba(0,0,0,0.25); }
+        :root { --bg:#faf8f5; --card:#fff; --border:#ede8e1; --text:#2d3142; --muted:#8c92a4; --primary:#ff6b6b; --primary-light:#fff0f0; --yellow:#ffd166; --green:#06d6a0; --blue:#4dabf7; --input:#fff; --tag:#f5f3ef; --shadow:0 4px 14px rgba(45,49,66,0.05); }
+        [data-theme="dark"] { --bg:#16181f; --card:#20232d; --border:#2d3240; --text:#f8fafc; --muted:#94a3b8; --primary:#ff7b7b; --primary-light:#2c2125; --yellow:#ffe082; --green:#2dd4bf; --blue:#60a5fa; --input:#191b24; --tag:#282c38; --shadow:0 4px 14px rgba(0,0,0,0.25); }
         * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
         body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; margin:0; padding:14px 14px 92px; min-height:100vh; }
         .max-w { max-width:480px; margin:0 auto; }
@@ -83,6 +114,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
         .btn-primary { background:var(--primary); color:#fff; }
         .btn-yellow { background:var(--yellow); color:#493800; }
         .btn-green { background:var(--green); color:#fff; }
+        .btn-sub { background:var(--tag); color:var(--text); border:1.5px solid var(--border); }
         .input-group { margin-bottom:10px; }
         .input-group input, .input-group select { width:100%; padding:13px 14px; border:1.5px solid var(--border); border-radius:12px; font-size:14px; background:var(--input); color:var(--text); outline:none; font-weight:700; }
         .input-group input:focus { border-color:var(--primary); }
@@ -135,7 +167,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
 def render_page(inner_content):
     return render_template_string(LAYOUT_HTML, content=inner_content)
 
-# ================= 3. 各画面コンテンツ (最小記述) =================
+# ================= 4. 各画面コンテンツ =================
 
 # --- ホーム画面 ---
 HOME_CONTENT = """
@@ -228,7 +260,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索結果 & 見やすい地図 ---
+# --- 検索結果 & 高視認性地図 ---
 RESULT_CONTENT = """
 <div class="top-bar">
     <a href="/" class="btn-sm">← 戻る</a>
@@ -330,127 +362,353 @@ FAVORITES_CONTENT = """
 </script>
 """
 
-# --- 抽選画面 (3大ルーレット・全項目編集対応) ---
+# --- 抽選画面 (本格円形ルーレット盤・全モード対応) ---
 GAME_CONTENT = """
 <div class="top-bar">
-    <div class="brand">🎯 抽選ルーレット</div>
+    <div class="brand">🎯 盛り上がり抽選</div>
     <button class="btn-sm" onclick="editItems()">✏️ 項目編集</button>
 </div>
+
 <div style="display:flex; gap:6px; margin-bottom:12px;">
-    <button class="btn-sm" style="flex:1; justify-content:center;" id="t-genre" onclick="setMode('genre')">🍽️ 店決め</button>
-    <button class="btn-sm" style="flex:1; justify-content:center;" id="t-otokogi" onclick="setMode('otokogi')">👑 男気</button>
-    <button class="btn-sm" style="flex:1; justify-content:center;" id="t-niji" onclick="setMode('niji')">🍻 二次会</button>
+    <button class="btn-sm r-tab" id="tab-genre" style="flex:1; justify-content:center;" onclick="switchWheel('genre')">🍽️ 店決め</button>
+    <button class="btn-sm r-tab" id="tab-otokogi" style="flex:1; justify-content:center;" onclick="switchWheel('otokogi')">👑 男気おごり</button>
+    <button class="btn-sm r-tab" id="tab-niji" style="flex:1; justify-content:center;" onclick="switchWheel('niji')">🍻 二次会判定</button>
 </div>
 
-<div class="card" style="text-align:center; padding:24px 16px;">
-    <div style="font-size:13px; font-weight:800; color:var(--muted); margin-bottom:6px;" id="mode-label">【店決めルーレット】</div>
-    <div style="font-size:24px; font-weight:900; margin:16px 0; color:var(--primary); min-height:36px;" id="roulette-res">スタートを押してね！</div>
-    <button class="btn-block btn-primary" onclick="spin()">🎯 ルーレット開始！</button>
+<div class="card" style="text-align:center; padding:18px 12px; margin-bottom:12px;">
+    <div style="position:relative; width:280px; height:280px; margin:0 auto 16px;">
+        <div style="position:absolute; top:-12px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:12px solid transparent; border-right:12px solid transparent; border-top:22px solid var(--primary); z-index:20; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.25));"></div>
+        <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); width:44px; height:44px; background:var(--card); border:3px solid var(--primary); border-radius:50%; z-index:15; display:flex; align-items:center; justify-content:center; font-size:18px; box-shadow:0 2px 8px rgba(0,0,0,0.15);">🍽️</div>
+        <canvas id="wheel-canvas" width="280" height="280" style="border-radius:50%; box-shadow:var(--shadow); transition:transform 4.5s cubic-bezier(0.15, 0.9, 0.2, 1);"></canvas>
+    </div>
+
+    <button class="btn-block btn-primary" id="spin-btn" style="font-size:16px; min-height:50px;" onclick="spinWheel()">🎯 ルーレットを回す！</button>
+</div>
+
+<div class="card" id="result-box" style="display:none; text-align:center; background:var(--primary-light); border-color:var(--primary);">
+    <div style="font-size:12px; font-weight:800; color:var(--muted);">当選結果</div>
+    <div style="font-size:26px; font-weight:900; color:var(--primary); margin:8px 0;" id="res-val">--</div>
+    <a href="#" id="res-search-btn" class="btn-block btn-green" style="display:none; margin:8px auto 0;">🔍 このジャンルでお店を探す ↗</a>
 </div>
 
 <script>
-    let mode = 'genre';
-    const presets = {
-        genre: JSON.parse(localStorage.getItem('eat_r_genre')||'["焼肉 🥩","居酒屋 🍺","カフェ ☕","ラーメン 🍜","海鮮 🐟","イタリアン 🍕"]'),
-        otokogi: JSON.parse(localStorage.getItem('eat_r_otokogi')||'["男気全額おごり！👑","端数おごり！🪙","1杯ごちそう！🍻","きっちり割り勘！🤝"]'),
-        niji: JSON.parse(localStorage.getItem('eat_r_niji')||'["もう1軒行くぞ！🍻","サクッと1杯だけ！🍷","今日は帰って寝る！🛌","カラオケ行っちゃう？🎤"]')
+    let curMode = 'genre';
+    const wheelPresets = {
+        genre: JSON.parse(localStorage.getItem('eat_r_genre') || '["焼肉 🥩","居酒屋 🍺","カフェ ☕","ラーメン 🍜","海鮮 🐟","カレー 🍛","イタリアン 🍕","中華 🥟"]'),
+        otokogi: JSON.parse(localStorage.getItem('eat_r_otokogi') || '["全額男気おごり！👑","端数だけおごり！🪙","1杯ごちそう！🍻","きっちり割り勘！🤝","幹事さん半額免除！✨","男気じゃんけん！✊"]'),
+        niji: JSON.parse(localStorage.getItem('eat_r_niji') || '["もう1軒行くぞ！🍻","サクッと1杯だけ！🍷","今日は帰って寝る！🛌","カラオケ行っちゃう？🎤","ラーメンで〆て帰宅！🍜"]')
     };
-    function setMode(m){
-        mode = m;
-        document.querySelectorAll('.btn-sm').forEach(b => b.style.borderColor='');
-        document.getElementById('t-'+m).style.borderColor='var(--primary)';
-        document.getElementById('mode-label').innerText = m==='genre'?'【店決めルーレット】':(m==='otokogi'?'【男気おごりルーレット】':'【二次会判定ルーレット】');
-        document.getElementById('roulette-res').innerText = "スタートを押してね！";
-    }
-    setMode('genre');
-    function spin(){
-        doVibrate(30);
-        const res = document.getElementById('roulette-res');
-        const list = presets[mode];
-        let c = 0;
-        const timer = setInterval(()=>{
-            res.innerText = list[Math.floor(Math.random()*list.length)];
-            c++;
-            if(c > 14){ clearInterval(timer); doVibrate([80,40,80]); }
-        }, 80);
-    }
-    function editItems(){
-        const cur = presets[mode].join(', ');
-        const str = prompt("カンマ区切りで項目を入力してください:", cur);
-        if(str){
-            const arr = str.split(',').map(x=>x.trim()).filter(x=>x);
-            if(arr.length >= 2){ presets[mode]=arr; localStorage.setItem('eat_r_'+mode, JSON.stringify(arr)); alert("保存しました！"); }
-            else alert("2項目以上必要です");
+    const wheelColors = ["#ffc9c9","#ffe3a8","#fff3bf","#bbf7d0","#c5f6fa","#d0ebff","#dbe4ff","#f3d9fa"];
+    let curDeg = 0, isSpinning = false;
+
+    function drawCanvas() {
+        const canvas = document.getElementById('wheel-canvas');
+        if(!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, 280, 280);
+        const items = wheelPresets[curMode];
+        const num = items.length, arc = (2 * Math.PI) / num;
+        for(let i=0; i<num; i++){
+            const a = i * arc;
+            ctx.fillStyle = wheelColors[i % wheelColors.length];
+            ctx.beginPath();
+            ctx.arc(140, 140, 136, a, a + arc, false);
+            ctx.arc(140, 140, 0, a + arc, a, true);
+            ctx.fill();
+            ctx.save();
+            ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 2; ctx.stroke();
+            ctx.fillStyle = "#2d3142";
+            ctx.font = "bold 12.5px -apple-system, sans-serif";
+            ctx.translate(140 + Math.cos(a + arc/2) * 88, 140 + Math.sin(a + arc/2) * 88);
+            ctx.rotate(a + arc/2 + Math.PI/2);
+            ctx.fillText(items[i], -ctx.measureText(items[i]).width / 2, 0);
+            ctx.restore();
         }
     }
+
+    function switchWheel(m){
+        if(isSpinning) return;
+        curMode = m;
+        document.querySelectorAll('.r-tab').forEach(b => {
+            b.style.background = 'var(--tag)';
+            b.style.borderColor = 'var(--border)';
+            b.style.color = 'var(--text)';
+        });
+        const activeBtn = document.getElementById('tab-' + m);
+        if(activeBtn) {
+            activeBtn.style.background = 'var(--primary)';
+            activeBtn.style.borderColor = 'var(--primary)';
+            activeBtn.style.color = '#fff';
+        }
+        document.getElementById('result-box').style.display = 'none';
+        drawCanvas();
+    }
+
+    function spinWheel(){
+        if(isSpinning) return;
+        isSpinning = true;
+        const btn = document.getElementById('spin-btn');
+        btn.disabled = true;
+        btn.innerText = "抽選中...";
+        document.getElementById('result-box').style.display = 'none';
+        
+        let vibs = 0;
+        const vTimer = setInterval(() => {
+            doVibrate(20);
+            vibs++;
+            if(vibs > 14) clearInterval(vTimer);
+        }, 250);
+
+        const extra = Math.floor(Math.random() * 360);
+        curDeg += 360 * 5 + extra;
+        const canvas = document.getElementById('wheel-canvas');
+        canvas.style.transform = `rotate(${curDeg}deg)`;
+
+        setTimeout(() => {
+            isSpinning = false;
+            btn.disabled = false;
+            btn.innerText = "🎯 もう一度回す！";
+            doVibrate([100, 50, 100]);
+
+            const items = wheelPresets[curMode];
+            const deg = curDeg % 360;
+            const step = 360 / items.length;
+            const idx = Math.floor((360 - deg + 270) % 360 / step);
+            const picked = items[idx];
+
+            document.getElementById('res-val').innerText = picked;
+            const sBtn = document.getElementById('res-search-btn');
+            if(curMode === 'genre'){
+                const clean = picked.split(' ')[0];
+                sBtn.style.display = 'inline-flex';
+                sBtn.href = `/search?keyword=${encodeURIComponent(clean)}`;
+            } else {
+                sBtn.style.display = 'none';
+            }
+            document.getElementById('result-box').style.display = 'block';
+        }, 4500);
+    }
+
+    function editItems(){
+        const items = wheelPresets[curMode];
+        const nameMap = {genre:'店決め', otokogi:'男気おごり', niji:'二次会判定'};
+        const str = prompt(`【${nameMap[curMode]}】の項目をカンマ(,)区切りで入力:`, items.join(', '));
+        if(str){
+            const arr = str.split(',').map(s=>s.trim()).filter(s=>s);
+            if(arr.length >= 2){
+                wheelPresets[curMode] = arr;
+                localStorage.setItem('eat_r_' + curMode, JSON.stringify(arr));
+                drawCanvas();
+                alert("保存しました！");
+            } else {
+                alert("2項目以上入力してください");
+            }
+        }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+        switchWheel('genre');
+    });
 </script>
 """
 
-# --- ツール画面 (タイマー & 傾斜割り勘) ---
+# --- ツール画面 (タイマー & 傾斜割り勘 & 幹事ToDo完全復元) ---
 TOOLS_CONTENT = """
-<div class="top-bar"><div class="brand">🧮 おでかけツール</div></div>
+<div class="top-bar">
+    <div class="brand">🧮 おでかけツール</div>
+    <button class="btn-sm" id="btn-notify-perm" onclick="requestNotification()">🔔 通知をON</button>
+</div>
 
+<!-- 席・コース管理（ダブルタイマー） -->
 <div class="card">
-    <div style="font-size:12px; font-weight:800; color:var(--muted); margin-bottom:8px;">⏱️ コース・退席タイマー</div>
-    <div style="display:flex; justify-content:space-around; align-items:center; background:var(--tag); padding:10px; border-radius:12px; margin-bottom:10px;">
-        <div><div style="font-size:10px; color:var(--muted); font-weight:800;">🍺 L.O.まで</div><div style="font-size:22px; font-weight:900; color:var(--yellow);" id="t-lo">90:00</div></div>
-        <div><div style="font-size:10px; color:var(--muted); font-weight:800;">🚪 完全退席</div><div style="font-size:22px; font-weight:900; color:var(--primary);" id="t-ex">120:00</div></div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <span style="font-size:12px; font-weight:800; color:var(--muted);">⏱️ 席・コース時間管理</span>
+        <span id="current-clock" style="font-size:12px; font-weight:800; color:var(--primary);">--:--</span>
+    </div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-bottom:10px;">
+        <div style="background:var(--tag); padding:12px; border-radius:12px; text-align:center;">
+            <div style="font-size:11px; font-weight:800; color:var(--muted);">🍺 ラストオーダー</div>
+            <div style="font-size:26px; font-weight:900; font-family:monospace; color:var(--yellow);" id="timer-lo">--:--</div>
+        </div>
+        <div style="background:var(--tag); padding:12px; border-radius:12px; text-align:center;">
+            <div style="font-size:11px; font-weight:800; color:var(--muted);">🚪 完全退席</div>
+            <div style="font-size:26px; font-weight:900; font-family:monospace; color:var(--primary);" id="timer-exit">--:--</div>
+        </div>
+    </div>
+    <div style="display:flex; gap:6px; margin-bottom:6px;">
+        <button class="btn-sm" style="flex:1; justify-content:center;" onclick="setTimer(90, 60)">90分(LO60)</button>
+        <button class="btn-sm" style="flex:1; justify-content:center;" onclick="setTimer(120, 90)">120分(LO90)</button>
+        <button class="btn-sm" style="flex:1; justify-content:center;" onclick="setTimer(180, 150)">180分(LO150)</button>
     </div>
     <div style="display:flex; gap:6px;">
-        <button class="btn-sm btn-primary" style="flex:1; justify-content:center;" onclick="toggleTimer()" id="t-btn">タイマー開始</button>
+        <button class="btn-sm btn-primary" style="flex:1; justify-content:center;" onclick="toggleTimer()" id="btn-timer-run">タイマー開始</button>
         <button class="btn-sm" onclick="resetTimer()">リセット</button>
     </div>
 </div>
 
+<!-- 傾斜割り勘計算 -->
 <div class="card">
-    <div style="font-size:12px; font-weight:800; color:var(--muted); margin-bottom:8px;">💸 傾斜割り勘計算</div>
-    <div class="input-group"><input type="number" id="w-tot" placeholder="合計金額 (円)"></div>
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-        <div class="input-group"><input type="number" id="w-dr" value="2" placeholder="飲む人数"><small style="font-size:10px; color:var(--muted); font-weight:700;">飲む人</small></div>
-        <div class="input-group"><input type="number" id="w-nd" value="1" placeholder="飲まない人数"><small style="font-size:10px; color:var(--muted); font-weight:700;">飲まない人</small></div>
+    <div style="font-size:12px; font-weight:800; color:var(--muted); margin-bottom:10px;">💸 傾斜割り勘計算</div>
+    <div class="input-group">
+        <input type="number" id="split-total" placeholder="合計お会計 (円)">
     </div>
-    <div class="input-group"><input type="number" id="w-disc" value="1000" placeholder="割引額"><small style="font-size:10px; color:var(--muted); font-weight:700;">飲まない人の割引額 (円引)</small></div>
-    <button class="btn-block btn-primary" onclick="calcSplit()">割り勘を計算</button>
-    <div id="w-res" style="display:none; background:var(--tag); padding:10px; border-radius:12px; font-weight:800; font-size:13px; margin-top:8px;">
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px;"><span>🍺 飲む人:</span><span id="res-dr" style="color:var(--primary); font-size:16px;">0円</span></div>
-        <div style="display:flex; justify-content:space-between;"><span>🍵 飲まない人:</span><span id="res-nd" style="color:var(--green); font-size:16px;">0円</span></div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+        <div class="input-group"><input type="number" id="split-drinkers" value="2" placeholder="飲む人"><small style="font-size:11px; font-weight:700; color:var(--muted);">飲む人数</small></div>
+        <div class="input-group"><input type="number" id="split-nondrinkers" value="1" placeholder="飲まない人"><small style="font-size:11px; font-weight:700; color:var(--muted);">飲まない人数</small></div>
+    </div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+        <div class="input-group"><input type="number" id="split-discount" value="1000" placeholder="割引額"><small style="font-size:11px; font-weight:700; color:var(--muted);">飲まない人の割引額 (円引)</small></div>
+        <div class="input-group"><input type="number" id="split-kanji" value="0" placeholder="幹事負担"><small style="font-size:11px; font-weight:700; color:var(--muted);">幹事の追加負担 (円)</small></div>
+    </div>
+    <button class="btn-block btn-primary" onclick="calcSplit()">割り勘を計算する</button>
+
+    <div id="split-res" style="display:none; background:var(--tag); padding:12px; border-radius:12px; margin-top:10px; font-size:13px; font-weight:700;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍺 飲んだ人:</span><b style="color:var(--primary); font-size:16px;" id="res-drinker">0円</b></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;" id="box-nondrinker"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
+        <div style="font-size:11px; color:var(--muted); text-align:right;" id="res-diff">余剰: 0円</div>
+        <div class="input-group" style="margin-top:8px;">
+            <input type="text" id="paypay-link" placeholder="送金先PayPay ID・リンク (任意)">
+        </div>
+        <button class="btn-block btn-green" style="margin-top:6px;" onclick="shareSplit()">💬 LINEに結果を共有</button>
+    </div>
+</div>
+
+<!-- 幹事ToDoチェックリスト -->
+<div class="card">
+    <div style="font-size:12px; font-weight:800; color:var(--muted); margin-bottom:10px;">📝 幹事ToDoチェックリスト</div>
+    <div id="todo-box"></div>
+    <div style="display:flex; gap:6px; margin-top:10px;">
+        <input type="text" id="todo-input" placeholder="やること追加..." style="flex:1; padding:10px; border:1.5px solid var(--border); border-radius:10px; font-size:12px; background:var(--input); color:var(--text); font-weight:700; outline:none;">
+        <button class="btn-sm btn-primary" onclick="addTodo()">追加</button>
     </div>
 </div>
 
 <script>
-    let exSec=7200, loSec=5400, tId=null, running=false;
-    function updateT(){
-        document.getElementById('t-lo').innerText = `${String(Math.floor(loSec/60)).padStart(2,'0')}:${String(loSec%60).padStart(2,'0')}`;
-        document.getElementById('t-ex').innerText = `${String(Math.floor(exSec/60)).padStart(2,'0')}:${String(exSec%60).padStart(2,'0')}`;
+    setInterval(() => {
+        const d = new Date();
+        document.getElementById('current-clock').innerText = d.toTimeString().split(' ')[0].substring(0, 5);
+    }, 1000);
+
+    let exitSec = 7200, loSec = 5400, timerId = null, running = false;
+    function setTimer(ex, lo) { exitSec = ex * 60; loSec = lo * 60; updateTimerUI(); }
+    
+    function requestNotification() {
+        if (!("Notification" in window)) return alert("この端末は通知に非対応です");
+        Notification.requestPermission().then(perm => {
+            if(perm === 'granted') {
+                document.getElementById('btn-notify-perm').innerText = "🔔 通知ON済み";
+                alert("タイマー終了時の通知をONにしました！");
+            }
+        });
     }
-    function toggleTimer(){
-        doVibrate(30); running = !running;
-        const b = document.getElementById('t-btn');
-        if(running){
-            b.innerText="停止";
-            tId = setInterval(()=>{
-                if(loSec>0) loSec--;
-                if(exSec>0) exSec--;
-                if(loSec===0||exSec===0) doVibrate([200,100,200]);
-                updateT();
-            }, 1000);
-        } else { b.innerText="再開"; clearInterval(tId); }
-    }
-    function resetTimer(){ doVibrate(30); running=false; clearInterval(tId); document.getElementById('t-btn').innerText="タイマー開始"; exSec=7200; loSec=5400; updateT(); }
-    function calcSplit(){
+
+    function toggleTimer() {
         doVibrate(30);
-        const tot = parseInt(document.getElementById('w-tot').value)||0;
-        const dr = parseInt(document.getElementById('w-dr').value)||0;
-        const nd = parseInt(document.getElementById('w-nd').value)||0;
-        const disc = parseInt(document.getElementById('w-disc').value)||0;
-        const num = dr + nd;
-        if(!tot || num<=0) return alert("金額と人数を入力してください");
-        const base = Math.ceil(((tot + disc*nd)/num)/100)*100;
-        const nonBase = Math.max(0, base - disc);
-        document.getElementById('res-dr').innerText = `${base.toLocaleString()} 円`;
-        document.getElementById('res-nd').innerText = `${nonBase.toLocaleString()} 円`;
-        document.getElementById('w-res').style.display='block';
+        running = !running;
+        const b = document.getElementById('btn-timer-run');
+        if(running) {
+            b.innerText = "停止";
+            timerId = setInterval(() => {
+                if(exitSec > 0) exitSec--;
+                if(loSec > 0) loSec--;
+                if (loSec === 0) {
+                    doVibrate([200, 100, 200]);
+                    if ("Notification" in window && Notification.permission === "granted") {
+                        new Notification("【EAT MAP】ラストオーダーの時間です！🍺");
+                    }
+                }
+                if (exitSec === 0) {
+                    doVibrate([300, 100, 300]);
+                    if ("Notification" in window && Notification.permission === "granted") {
+                        new Notification("【EAT MAP】お席の終了時間です！🚪");
+                    }
+                    clearInterval(timerId);
+                }
+                updateTimerUI();
+            }, 1000);
+        } else { b.innerText = "再開"; clearInterval(timerId); }
     }
+    function resetTimer() {
+        doVibrate(30);
+        running = false; clearInterval(timerId);
+        document.getElementById('btn-timer-run').innerText = "タイマー開始";
+        setTimer(120, 90);
+    }
+    function updateTimerUI() {
+        const lm = String(Math.floor(loSec/60)).padStart(2,'0'), ls = String(loSec%60).padStart(2,'0');
+        const em = String(Math.floor(exitSec/60)).padStart(2,'0'), es = String(exitSec%60).padStart(2,'0');
+        document.getElementById('timer-lo').innerText = `${lm}:${ls}`;
+        document.getElementById('timer-exit').innerText = `${em}:${es}`;
+    }
+    updateTimerUI();
+
+    let splitData = null;
+    function calcSplit() {
+        doVibrate(30);
+        const tot = parseInt(document.getElementById('split-total').value) || 0;
+        const dr = parseInt(document.getElementById('split-drinkers').value) || 0;
+        const ndr = parseInt(document.getElementById('split-nondrinkers').value) || 0;
+        const disc = parseInt(document.getElementById('split-discount').value) || 0;
+        const kj = parseInt(document.getElementById('split-kanji').value) || 0;
+        const num = dr + ndr;
+        if(!tot || num <= 0) return alert("金額と人数を入力してください");
+
+        const adj = tot - kj + (disc * ndr);
+        const base = Math.ceil((adj / num) / 100) * 100;
+        const nonBase = Math.max(0, base - disc);
+        const collected = (base * dr) + (nonBase * ndr) + kj;
+
+        document.getElementById('res-drinker').innerText = `${base.toLocaleString()} 円`;
+        document.getElementById('res-nondrinker').innerText = `${nonBase.toLocaleString()} 円`;
+        document.getElementById('res-diff').innerText = `集金合計: ${collected.toLocaleString()}円 (お釣り: ${collected - tot}円)`;
+        document.getElementById('split-res').style.display = 'block';
+
+        splitData = { tot, dr, ndr, base, nonBase, kj };
+    }
+
+    function shareSplit() {
+        doVibrate(30);
+        if(!splitData) return;
+        const pay = document.getElementById('paypay-link').value.trim();
+        let msg = `🍻 お会計の割り勘まとめ\\n合計: ${splitData.tot.toLocaleString()}円\\n---\\n・飲む人: 各 ${splitData.base.toLocaleString()}円 (${splitData.dr}名)\\n`;
+        if(splitData.ndr > 0) msg += `・飲まない人: 各 ${splitData.nonBase.toLocaleString()}円 (${splitData.ndr}名)\\n`;
+        if(pay) msg += `\\n💰 送金先: ${pay}\\n`;
+        msg += `よろしくお願いします！`;
+
+        const u = `https://line.me/R/msg/text/?${encodeURIComponent(msg)}`;
+        if(navigator.share) navigator.share({title: 'お会計割り勘', text: msg});
+        else window.open(u, '_blank');
+    }
+
+    let todos = JSON.parse(localStorage.getItem('eatmap_todos') || '["お店の予約確認", "アレルギーの有無確認", "集金・PayPay回収"]');
+    function renderTodos() {
+        const box = document.getElementById('todo-box');
+        box.innerHTML = todos.map((t, idx) => `
+            <div style="display:flex; align-items:center; gap:10px; font-size:13px; font-weight:700; padding:8px 0; border-bottom:1.5px dashed var(--border);">
+                <input type="checkbox" onchange="removeTodo(${idx})" style="width:16px; height:16px; accent-color:var(--primary);">
+                <span>${t}</span>
+            </div>
+        `).join('');
+    }
+    function addTodo() {
+        const input = document.getElementById('todo-input');
+        const v = input.value.trim();
+        if(!v) return;
+        doVibrate(20);
+        todos.push(v);
+        localStorage.setItem('eatmap_todos', JSON.stringify(todos));
+        input.value = "";
+        renderTodos();
+    }
+    function removeTodo(i) {
+        doVibrate(40);
+        setTimeout(() => {
+            todos.splice(i, 1);
+            localStorage.setItem('eatmap_todos', JSON.stringify(todos));
+            renderTodos();
+        }, 300);
+    }
+    renderTodos();
 </script>
 """
 
@@ -489,7 +747,7 @@ CHAT_CONTENT = """
         box.scrollTop = box.scrollHeight;
 
         const wId = "w-" + Date.now();
-        box.innerHTML += `<div id="${wId}" style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai" style="color:var(--muted);"><span class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;border-top-color:var(--primary);margin:0;"></span> 考え中...</div></div>`;
+        box.innerHTML += `<div id="${wId}" style="display:flex; gap:8px; align-items:flex-start; margin-top:4px;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai" style="color:var(--muted);"><span class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;border-top-color:var(--primary);margin:0;"></span> 考え中...</div></div>`;
         box.scrollTop = box.scrollHeight;
 
         try {
@@ -515,7 +773,7 @@ CHAT_CONTENT = """
 </script>
 """
 
-# ================= 4. バックエンドAPI & ルーティング =================
+# ================= 5. バックエンドAPI & ルーティング =================
 
 def fetch_shops(keyword="", area="", lat=None, lng=None):
     if not HOTPEPPER_API_KEY or "ここに" in HOTPEPPER_API_KEY:
@@ -572,18 +830,18 @@ def tools(): return render_page(TOOLS_CONTENT)
 @app.route('/chat')
 def chat(): return render_page(CHAT_CONTENT)
 
-# --- 超高速・低遅延 Gemini API (URLクエリ不使用・X-goog-api-keyヘッダー認証) ---
+# --- 超高速・低遅延 Gemini API (公式cURL準拠) ---
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     msg = html.escape((request.get_json(silent=True) or {}).get('message', '')[:100])
     if not GEMINI_API_KEY:
         return jsonify({"reply": "APIキーが設定されていません。"})
-
+        
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-    prompt = f"日本の飲食店コンシェルジュです。質問「{msg}」に、日本語の敬語で80文字以内で親切かつ簡潔に即答してください。太字記号（**）は禁止。"
+    prompt = f"日本の飲食店案内役です。質問「{msg}」に、日本語の敬語で80文字以内で親切かつ簡潔に即答してください。太字記号（**など）は禁止。"
     payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
     headers = {'Content-Type': 'application/json', 'X-goog-api-key': GEMINI_API_KEY}
-
+    
     try:
         req = urllib.request.Request(url, data=payload, headers=headers)
         with urllib.request.urlopen(req, timeout=25) as res:
