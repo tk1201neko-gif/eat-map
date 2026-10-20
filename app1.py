@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】シンプル × ポップ（見やすい高機能地図 統合版）app1.py
+# 【EAT MAP】シンプル × ポップ 完全統合版 app1.py
 # ------------------------------------------------------------------------------
 # ■ 組み込み機能:
 #   - 見やすい地図システム (高視認性Voyager / リアル航空写真 / 全画面拡大 / 番号付きピン)
@@ -26,6 +26,7 @@ from flask import Flask, request, render_template_string, jsonify, Response
 
 app = Flask(__name__)
 
+# パターンB: 環境変数を優先しつつ、未設定なら直接キーを使う安全設計
 HOTPEPPER_API_KEY   = os.environ.get("HOTPEPPER_API_KEY", "").strip()
 GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "").strip()
 MAPBOX_ACCESS_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN", "").strip()
@@ -1032,6 +1033,7 @@ GAME_HTML = """
     <script>
         let currentMode = 'genre';
         
+        // 全モードでLocalStorageから読み込み・保存を対応
         const wheelPresets = {
             genre: JSON.parse(localStorage.getItem('eatmap_roulette_genre') || '["焼肉 🥩", "居酒屋 🍺", "カフェ ☕", "ラーメン 🍜", "海鮮 🐟", "カレー 🍛", "イタリアン 🍕", "中華 🥟"]'),
             otokogi: JSON.parse(localStorage.getItem('eatmap_roulette_otokogi') || '["男気全額おごり！👑", "端数だけおごり！🪙", "次の店1杯ごちそう！🍻", "仲良くきっちり割り勘！🤝", "幹事さん半額免除！✨", "じゃんけんで再抽選！✊"]'),
@@ -1116,6 +1118,7 @@ GAME_HTML = """
             }, 4000);
         }
 
+        // 現在表示しているタブの項目を編集して保存
         function editItems() {
             const currentItems = wheelPresets[currentMode].join(', ');
             const str = prompt(`【${currentMode === 'genre' ? '店決め' : currentMode === 'otokogi' ? '男気おごり' : '二次会'}】\\nカンマ(,)区切りで項目を入力してください:`, currentItems);
@@ -1574,7 +1577,7 @@ def manifest():
 @app.route('/sw.js')
 def sw():
     sw_code = """
-    const CACHE_NAME = 'eatmap-v16';
+    const CACHE_NAME = 'eatmap-v20';
     self.addEventListener('install', e => self.skipWaiting());
     self.addEventListener('activate', e => e.waitUntil(
         caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k)))).then(() => self.clients.claim())
