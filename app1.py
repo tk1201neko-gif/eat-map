@@ -1,7 +1,7 @@
 # ==============================================================================
-# 【EAT MAP】新機能4種 ＆ UI/通信バグ完全修正 完全統合版 app1.py
+# 【EAT MAP】完全アプリ内完結・Google Places・OSM-JP統合版 app1.py
 # ==============================================================================
-import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
+import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math, concurrent.futures
 from collections import defaultdict
 from flask import Flask, request, render_template_string, jsonify, Response
 
@@ -12,9 +12,10 @@ socket.getaddrinfo = lambda *args, **kwargs: [r for r in _orig_gai(*args, **kwar
 app = Flask(__name__)
 
 # --- APIキーの設定 ---
-HOTPEPPER_API_KEY = os.environ.get("HOTPEPPER_API_KEY", "").strip()
-GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "").strip()
-GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "").strip()
+HOTPEPPER_API_KEY     = os.environ.get("HOTPEPPER_API_KEY", "").strip()
+GROQ_API_KEY          = os.environ.get("GROQ_API_KEY", "").strip()
+GEMINI_API_KEY        = os.environ.get("GEMINI_API_KEY", "").strip()
+GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY", "").strip() or "AIzaSyDpVErGY32EqC5_jArZs0RnA52Vz5pLMLs"
 
 if not GEMINI_API_KEY:
     for k, v in os.environ.items():
@@ -28,6 +29,8 @@ if not GEMINI_API_KEY:
 # ================= 1. 安全対策・キャッシュ・セキュリティ =================
 IP_LOG = defaultdict(list)
 AI_CACHE = {}
+PLACES_CACHE = {}
+SEARCH_CACHE = {}
 
 @app.before_request
 def firewall():
@@ -39,7 +42,7 @@ def firewall():
     if len(IP_LOG) > 2000:
         for k in list(IP_LOG.keys()):
             if not IP_LOG[k]: del IP_LOG[k]
-    if len(IP_LOG[ip]) >= 100: 
+    if len(IP_LOG[ip]) >= 120: 
         return "アクセス過多です。", 429
     IP_LOG[ip].append(now)
 
@@ -53,7 +56,7 @@ def apply_security_and_compress(res):
         "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:; "
         "img-src 'self' https: data: blob:; "
         "font-src 'self' https: data:; "
-        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://api.groq.com https://*.openstreetmap.org https://tile.openstreetmap.jp https://cyberjapandata.gsi.go.jp https://router.project-osrm.org;"
+        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://api.groq.com https://*.openstreetmap.org https://tile.openstreetmap.jp https://cyberjapandata.gsi.go.jp https://router.project-osrm.org https://places.googleapis.com https://maps.googleapis.com;"
     )
     if res.content_type and 'text/html' in res.content_type:
         res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -70,21 +73,80 @@ def apply_security_and_compress(res):
 DEFAULT_SHOPS = [
     {
         "name": "姫路和食 個室 旬彩庵 (サンプル)", "genre": "居酒屋・個室和食",
+        "catch": "姫路駅すぐ！旬の鮮魚と厳選地酒を完全個室で楽しむ",
         "address": "兵庫県姫路市駅前町100", "budget": "3,500円〜5,000円", "min_budget": 3500,
-        "lat": 34.8290, "lng": 134.6900, "tel": "079-000-0002", "open": "17:00～23:30 (L.O. 22:30)", "access": "姫路駅北口徒歩3分",
-        "has_private": True, "smoking_info": "🚬 喫煙可", "has_free_drink": True,
-        "photo": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600", "url": "https://www.hotpepper.jp/"
+        "lat": 34.8290, "lng": 134.6900, "tel": "079-000-0002", "open": "17:00～23:30 (L.O. 22:30)",
+        "close": "不定休", "capacity": "80席 (宴会最大40名)", "card": "利用可 (VISA, Master, JCB)",
+        "access": "JR姫路駅北口から徒歩3分・みゆき通り沿い",
+        "has_private": True, "smoking_info": "🚬 喫煙席あり", "has_free_drink": True,
+        "photo": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600",
+        "google_rating": 4.3, "google_reviews_count": 128
     },
     {
         "name": "CAFÉ DE ÉTOILE (サンプル)", "genre": "カフェ・スイーツ",
+        "catch": "落ち着いた空間で自家焙煎珈琲と季節のパフェを",
         "address": "兵庫県姫路市本町68", "budget": "1,000円〜2,000円", "min_budget": 1000,
-        "lat": 34.8340, "lng": 134.6930, "tel": "079-000-0001", "open": "10:00～19:00 (L.O. 18:30)", "access": "地下街直結",
-        "has_private": False, "smoking_info": "🚭 全席禁煙", "has_free_drink": False,
-        "photo": "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=600", "url": "https://www.hotpepper.jp/"
+        "lat": 34.8340, "lng": 134.6930, "tel": "079-000-0001", "open": "10:00～19:00 (L.O. 18:30)",
+        "close": "毎週水曜日", "capacity": "32席", "card": "利用可 (各種キャッシュレス対応)",
+        "access": "姫路駅地下街直結・大手前通り沿い",
+        "has_private": False, "smoking_info": "🚭 完全禁煙", "has_free_drink": False,
+        "photo": "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=600",
+        "google_rating": 4.1, "google_reviews_count": 76
     }
 ]
 
-# ================= 3. 共通ベーステンプレート =================
+# ================= 3. Google Places API 並行合体エンジン =================
+def fetch_google_place_rating(name, address):
+    if not GOOGLE_PLACES_API_KEY:
+        return None, 0
+    clean_name = re.sub(r'\(.*?\)|（.*?）', '', name).strip()
+    cache_key = f"{clean_name}_{address[:12]}"
+    if cache_key in PLACES_CACHE:
+        return PLACES_CACHE[cache_key]
+
+    # Google Places API (New) Text Search
+    try:
+        url = "https://places.googleapis.com/v1/places:searchText"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+            "X-Goog-FieldMask": "places.displayName,places.rating,places.userRatingCount"
+        }
+        body = json.dumps({"textQuery": f"{clean_name} {address}".strip(), "maxResultCount": 1}).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers=headers)
+        with urllib.request.urlopen(req, timeout=3.5) as res:
+            d = json.loads(res.read().decode("utf-8"))
+            places = d.get("places", [])
+            if places:
+                r = places[0].get("rating")
+                c = places[0].get("userRatingCount", 0)
+                PLACES_CACHE[cache_key] = (r, c)
+                return r, c
+    except Exception:
+        pass
+
+    PLACES_CACHE[cache_key] = (None, 0)
+    return None, 0
+
+def enrich_shops_with_google_places(shop_list):
+    if not GOOGLE_PLACES_API_KEY or not shop_list:
+        return
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_map = {
+            executor.submit(fetch_google_place_rating, s["name"], s.get("address", "")): s
+            for s in shop_list[:15]
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            s = future_map[future]
+            try:
+                r, c = future.result()
+                s["google_rating"] = r
+                s["google_reviews_count"] = c
+            except Exception:
+                s["google_rating"] = None
+                s["google_reviews_count"] = 0
+
+# ================= 4. 共通ベーステンプレート =================
 LAYOUT_HTML = """<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -94,8 +156,8 @@ LAYOUT_HTML = """<!DOCTYPE html>
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#ff5252">
     <!-- 地図高速化のための事前接続 -->
-    <link rel="preconnect" href="https://cyberjapandata.gsi.go.jp" crossorigin>
     <link rel="preconnect" href="https://tile.openstreetmap.jp" crossorigin>
+    <link rel="preconnect" href="https://cyberjapandata.gsi.go.jp" crossorigin>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
@@ -174,7 +236,8 @@ LAYOUT_HTML = """<!DOCTYPE html>
         [data-theme="light"] .btn-sub .ripple-anim, [data-theme="light"] .btn-icon .ripple-anim { background: rgba(0,0,0,0.1); }
         @keyframes ripple-run { to { transform: scale(3); opacity: 0; } }
 
-        /* ナイトマップ用CSSフィルター */
+        /* OSM-JP 日本語地図のコントラスト鮮明化 ＆ ナイトマップ */
+        [data-theme="light"] .leaflet-tile-pane { filter: contrast(1.06) saturate(1.12); }
         [data-theme="dark"] .leaflet-tile-pane { filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7); }
 
         .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--card); border-top: 1.5px solid var(--border); display: flex; justify-content: space-around; padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); z-index: 9000; box-shadow: 0 -2px 10px rgba(0,0,0,0.03); }
@@ -194,7 +257,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <div id="loading-overlay"><div class="spinner"></div><div style="color:#fff; font-size:13px; font-weight:800;">処理中...</div></div>
+    <div id="loading-overlay"><div class="spinner"></div><div style="color:#fff; font-size:13px; font-weight:800;">店舗と評価データを取得中...</div></div>
     
     <!-- PWAインストール案内バナー -->
     <div id="pwa-install-banner">
@@ -289,7 +352,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
 def render_page(inner_content):
     return render_template_string(LAYOUT_HTML, content=inner_content)
 
-# ================= 4. 各画面コンテンツ =================
+# ================= 5. 各画面コンテンツ =================
 
 # --- ホーム画面 ---
 HOME_CONTENT = """
@@ -369,7 +432,9 @@ HOME_CONTENT = """
         <button type="submit" class="btn-block btn-primary" onclick="doVibrate(40)">条件でお店を探す</button>
     </form>
 </div>
-<div class="credit" style="font-size:11px; text-align:center; color:var(--muted); margin-top:8px;">Powered by <a href="http://webservice.recruit.co.jp/" target="_blank" style="color:var(--muted);">ホットペッパー Webサービス</a></div>
+<div class="credit" style="font-size:11px; text-align:center; color:var(--muted); margin-top:8px;">
+    Powered by ホットペッパー Webサービス & Google Places
+</div>
 </div>
 <script>
     function showLoad(){ document.getElementById('loading-overlay').style.display='flex'; }
@@ -429,7 +494,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索画面 (通常リスト ＋ アプリ内詳細モーダル ＋ 高速全画面マップ) ---
+# --- 検索画面 (外部サイト離脱ゼロ・完全アプリ内完結) ---
 RESULT_CONTENT = """
 <!-- ① 通常リストビュー -->
 <div id="view-list" class="max-w">
@@ -440,7 +505,8 @@ RESULT_CONTENT = """
 
     <div style="display:flex; gap:6px; margin-bottom:10px;">
         <button class="btn-sm sort-tab" id="sort-rec" style="flex:1; justify-content:center; background:var(--primary); color:#fff; border-color:var(--primary);" onclick="sortShops('default')">⭐ おすすめ順</button>
-        <button class="btn-sm sort-tab" id="sort-price" style="flex:1; justify-content:center;" onclick="sortShops('price')">💰 予算が安い順</button>
+        <button class="btn-sm sort-tab" id="sort-rating" style="flex:1; justify-content:center;" onclick="sortShops('rating')">🌟 Google高評価順</button>
+        <button class="btn-sm sort-tab" id="sort-price" style="flex:1; justify-content:center;" onclick="sortShops('price')">💰 予算順</button>
     </div>
 
     <!-- 通常マッププレビュー（右上に⛶拡大ボタン） -->
@@ -451,31 +517,41 @@ RESULT_CONTENT = """
 
     <div id="shops-list">
         {% for s in shops %}
-        <div class="card shop-card" data-budget="{{ s.min_budget }}">
+        <div class="card shop-card" data-budget="{{ s.min_budget }}" data-rating="{{ s.google_rating or 0 }}">
             <button class="fav-btn" style="position:absolute; top:12px; right:12px; font-size:18px; cursor:pointer; background:var(--card); border:1.5px solid var(--border); border-radius:10px; width:34px; height:34px; display:flex; align-items:center; justify-content:center;" onclick='toggleFav(this, {{ s | tojson }})'>♡</button>
+            
             {% if s.photo %}
-            <img src="{{ s.photo }}" style="width:100%; height:150px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222; cursor:pointer;" loading="lazy" onclick='openShopDetail({{ s | tojson }})'>
+            <img src="{{ s.photo }}" style="width:100%; height:150px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222; cursor:pointer;" loading="lazy" decoding="async" onclick='openShopDetail({{ s | tojson }})'>
             {% endif %}
             
-            <h3 class="shop-name" style="font-size:15px; font-weight:900; margin:0 0 6px 0; padding-right:40px; line-height:1.3; cursor:pointer;" onclick='openShopDetail({{ s | tojson }})'>
+            <h3 class="shop-name" style="font-size:15px; font-weight:900; margin:0 0 4px 0; padding-right:40px; line-height:1.3; cursor:pointer;" onclick='openShopDetail({{ s | tojson }})'>
                 <span style="background:var(--primary); color:#fff; font-size:11px; padding:2px 6px; border-radius:6px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}
             </h3>
+
+            {% if s.catch %}
+            <div style="font-size:11px; font-weight:700; color:var(--muted); margin-bottom:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">✨ {{ s.catch }}</div>
+            {% endif %}
             
+            <!-- バッジ表示 -->
             <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:6px;">
+                {% if s.google_rating %}
+                <span class="badge" style="background:#fef3c7; color:#92400e; font-weight:900; border:1px solid #fde68a;">⭐ Google {{ s.google_rating }} ({{ s.google_reviews_count }}件)</span>
+                {% endif %}
                 <span class="badge badge-primary">🏷️ {{ s.genre }}</span>
                 <span class="badge">💰 {{ s.budget }}</span>
             </div>
 
             <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px;">
-                {% if s.has_private %}<span class="badge badge-private">🚪 個室</span>{% endif %}
+                {% if s.has_private %}<span class="badge badge-private">🚪 個室あり</span>{% endif %}
                 <span class="badge badge-smoke">{{ s.smoking_info }}</span>
                 {% if s.has_free_drink %}<span class="badge badge-drink">🍺 飲み放題</span>{% endif %}
             </div>
 
             <div style="font-size:11.5px; color:var(--muted); margin-bottom:10px; line-height:1.4;">📍 {{ s.address }}</div>
             
+            <!-- アプリ内完結ボタン -->
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
-                <button class="btn-sm btn-sub" style="justify-content:center; padding:10px 0; font-weight:900;" onclick='openShopDetail({{ s | tojson }})'>🔍 店舗詳細</button>
+                <button class="btn-sm btn-primary" style="justify-content:center; padding:10px 0; font-weight:900;" onclick='openShopDetail({{ s | tojson }})'>🔍 店舗詳細を見る</button>
                 <button class="btn-sm btn-sub" style="justify-content:center; padding:10px 0; border:1px solid var(--blue); color:var(--blue);" onclick='switchToFullMap({{ loop.index0 }})'>🗺️ ルート案内</button>
             </div>
             
@@ -515,7 +591,7 @@ RESULT_CONTENT = """
     <button id="btn-research" onclick="doReSearch()" style="position:absolute; top:70px; left:50%; transform:translateX(-50%); z-index:1000; background:var(--primary); color:#fff; padding:8px 16px; border-radius:20px; font-weight:900; font-size:13px; box-shadow:0 4px 12px rgba(255,82,82,0.4); border:none; cursor:pointer; display:none;">📍 このエリアで再検索</button>
 
     <!-- 右側コントロールボタン -->
-    <div style="position:absolute; right:12px; bottom:200px; z-index:1000; display:flex; flex-direction:column; gap:8px;" id="map-controls">
+    <div style="position:absolute; right:12px; bottom:200px; z-index:1000; display:flex-direction:column; gap:8px; display:flex;" id="map-controls">
         <button onclick="toggle5MinCircle()" style="width:42px; height:42px; border-radius:50%; background:var(--card); border:1.5px solid var(--border); box-shadow:0 4px 12px rgba(0,0,0,0.15); font-size:18px; cursor:pointer;" title="5分圏内円">🚶</button>
         <button onclick="trackLocation()" style="width:42px; height:42px; border-radius:50%; background:var(--card); border:1.5px solid var(--border); box-shadow:0 4px 12px rgba(0,0,0,0.15); font-size:18px; cursor:pointer;" title="現在地追従">🎯</button>
     </div>
@@ -542,49 +618,60 @@ RESULT_CONTENT = """
                     </div>
                     <div style="font-size:10px; color:var(--muted); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📍 {{ s.address }}</div>
                     <div style="display:flex; flex-wrap:wrap; gap:3px;">
+                        {% if s.google_rating %}
+                        <span class="badge" style="background:#fef3c7; color:#92400e; font-weight:800; font-size:9.5px;">⭐ {{ s.google_rating }}</span>
+                        {% endif %}
                         <span class="badge badge-primary">💰 {{ s.budget }}</span>
                         {% if s.has_private %}<span class="badge badge-private">🚪個室</span>{% endif %}
-                        <span class="badge badge-smoke">{{ s.smoking_info }}</span>
                     </div>
                 </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px;">
                 <button class="btn-sm btn-sub" style="justify-content:center; padding:9px 0; border:1px solid var(--blue); color:var(--blue);" onclick='drawRoute({{ s.lat }}, {{ s.lng }}, "{{ s.name }}")'>🚶 ルート案内</button>
-                <button class="btn-sm btn-sub" style="justify-content:center; padding:9px 0;" onclick='openShopDetail({{ s | tojson }})'>🔍 詳細情報</button>
+                <button class="btn-sm btn-primary" style="justify-content:center; padding:9px 0;" onclick='openShopDetail({{ s | tojson }})'>🔍 店舗詳細</button>
             </div>
         </div>
         {% endfor %}
     </div>
 </div>
 
-<!-- ③ 新機能：店舗詳細モーダル（アプリ内完結） -->
+<!-- ③ 完全アプリ内完結・店舗フル情報シート（サイト離脱ゼロ） -->
 <div id="detail-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:flex-end; align-items:center; padding:14px; flex-direction:column;">
-    <div class="card swipe-modal-content" style="width:100%; max-width:440px; max-height:85vh; display:flex; flex-direction:column; margin:0 0 env(safe-area-inset-bottom); background:var(--card); padding:16px;">
+    <div class="card swipe-modal-content" style="width:100%; max-width:440px; max-height:88vh; display:flex; flex-direction:column; margin:0 0 env(safe-area-inset-bottom); background:var(--card); padding:16px;">
         <div class="swipe-handle"></div>
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
             <div style="font-size:16px; font-weight:900; line-height:1.3; flex:1;" id="dt-name">店舗詳細</div>
-            <button onclick="closeShopDetail()" style="background:none; border:none; font-size:18px; cursor:pointer; color:var(--text); padding-left:10px;">✕</button>
+            <button onclick="closeShopDetail()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text); padding-left:10px;">✕</button>
         </div>
         
         <div id="detail-scroll-body" style="overflow-y:auto; flex:1; padding-right:2px;">
-            <img id="dt-photo" src="" style="width:100%; height:180px; object-fit:cover; border-radius:12px; margin-bottom:12px; background:#222; display:none;">
+            <img id="dt-photo" src="" style="width:100%; height:190px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222; display:none;">
             
+            <div id="dt-catch" style="font-size:12px; font-weight:800; color:var(--primary); margin-bottom:10px; line-height:1.5;"></div>
+
             <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:12px;" id="dt-badges"></div>
             
-            <div style="font-size:12px; line-height:1.7; background:var(--tag); padding:12px; border-radius:12px; margin-bottom:12px;">
+            <div style="font-size:12px; line-height:1.8; background:var(--tag); padding:14px; border-radius:14px; margin-bottom:12px;">
+                <div style="margin-bottom:6px;"><b>⭐ Google星評価:</b> <span id="dt-google" style="color:#d97706; font-weight:900;">--</span></div>
                 <div style="margin-bottom:6px;"><b>💰 予算目安:</b> <span id="dt-budget">--</span></div>
                 <div style="margin-bottom:6px;"><b>🕒 営業時間:</b> <span id="dt-open">--</span></div>
-                <div style="margin-bottom:6px;"><b>📍 所在地:</b> <span id="dt-address">--</span></div>
+                <div style="margin-bottom:6px;"><b>🎌 定休日:</b> <span id="dt-close">--</span></div>
+                <div style="margin-bottom:6px;"><b>🪑 総席数:</b> <span id="dt-capacity">--</span></div>
+                <div style="margin-bottom:6px;"><b>💳 支払方法:</b> <span id="dt-card">--</span></div>
                 <div style="margin-bottom:6px;"><b>🚃 アクセス:</b> <span id="dt-access">--</span></div>
-                <div><b>🚬 喫煙区分:</b> <span id="dt-smoke">--</span></div>
+                <div><b>📍 所在地:</b> <span id="dt-address">--</span></div>
             </div>
         </div>
 
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px;">
-            <a href="#" id="dt-tel-btn" class="btn-block btn-green" style="margin:0; min-height:42px; font-size:13px;">📞 電話発信</a>
-            <button id="dt-route-btn" class="btn-block btn-primary" style="margin:0; min-height:42px; font-size:13px;">🚶 ルート案内</button>
+        <!-- アプリ内完結アクションボタン -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+            <a href="#" id="dt-tel-btn" class="btn-block btn-green" style="margin:0; min-height:44px; font-size:13px; justify-content:center;">📞 電話予約する</a>
+            <button id="dt-route-btn" class="btn-block btn-primary" style="margin:0; min-height:44px; font-size:13px;">🚶 ルート案内</button>
         </div>
-        <a href="#" id="dt-hp-link" target="_blank" class="btn-block btn-sub" style="margin-top:6px; min-height:38px; font-size:12px;">ホットペッパーで予約・クーポン ↗</a>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:6px;">
+            <button id="dt-invite-btn" class="btn-block btn-sub" style="margin:0; min-height:38px; font-size:12px;">📅 案内状作成</button>
+            <button id="dt-pin-btn" class="btn-block btn-sub" style="margin:0; min-height:38px; font-size:12px;">📌 予約メモ固定</button>
+        </div>
     </div>
 </div>
 
@@ -618,19 +705,19 @@ RESULT_CONTENT = """
     let fullMarkers = [], routeLayer = null, circle5m = null, userMarker = null;
     let uLat = null, uLng = null, isTracking = false, watchId = null;
     
-    let currentTileMode = 'gsi_std';
+    let currentTileMode = 'osmjp';
 
     const tileOptions = {
-        maxZoom: 18,
+        maxZoom: 19,
         keepBuffer: 4,
         updateWhenIdle: false,
         edgeBufferTiles: 1
     };
 
     const tileConfigs = {
-        gsi_std: {
-            url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
-            attr: '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>'
+        osmjp: {
+            url: 'https://tile.openstreetmap.jp/{z}/{x}/{y}.png',
+            attr: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
         },
         gsi_pale: {
             url: 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',
@@ -656,7 +743,7 @@ RESULT_CONTENT = """
 
         const cfg = tileConfigs[currentTileMode];
         mapPreview = L.map('map-preview', {zoomControl:false, dragging:false, touchZoom:false, scrollWheelZoom:false, doubleClickZoom:false}).setView([lat, lng], 15);
-        previewLayer = L.tileLayer(tileConfigs.gsi_pale.url, { ...tileOptions, attribution: cfg.attr }).addTo(mapPreview);
+        previewLayer = L.tileLayer(cfg.url, { ...tileOptions, attribution: cfg.attr }).addTo(mapPreview);
 
         const bounds = [];
         shops.forEach((s, i) => {
@@ -740,10 +827,10 @@ RESULT_CONTENT = """
 
     function toggleMapTile() {
         doVibrate(25);
-        currentTileMode = (currentTileMode === 'gsi_std') ? 'gsi_pale' : 'gsi_std';
+        currentTileMode = (currentTileMode === 'osmjp') ? 'gsi_pale' : 'osmjp';
         const cfg = tileConfigs[currentTileMode];
         const btn = document.getElementById('btn-maptile');
-        btn.innerText = (currentTileMode === 'gsi_std') ? '🗺️ 淡色切替' : '🗺️ 標準切替';
+        btn.innerText = (currentTileMode === 'osmjp') ? '🗺️ 淡色切替' : '🗺️ 標準切替';
 
         if(fullLayer && mapFull) {
             mapFull.removeLayer(fullLayer);
@@ -777,23 +864,34 @@ RESULT_CONTENT = """
         if(cards[idx]) cards[idx].scrollIntoView({behavior: 'smooth', block: 'nearest', inline: 'center'});
     }
 
-    // 新機能：アプリ内店舗詳細モーダルの表示制御
+    // アプリ内完結：店舗詳細シートの表示
     let currentDetailShop = null;
     function openShopDetail(s) {
         doVibrate(30);
         currentDetailShop = s;
         document.getElementById('dt-name').innerText = s.name;
+        document.getElementById('dt-catch').innerText = s.catch ? `「${s.catch}」` : '';
         document.getElementById('dt-budget').innerText = s.budget || "要確認";
         document.getElementById('dt-open').innerText = s.open || "要確認";
-        document.getElementById('dt-address').innerText = s.address || "情報なし";
+        document.getElementById('dt-close').innerText = s.close || "無休 / 要確認";
+        document.getElementById('dt-capacity').innerText = s.capacity || "要確認";
+        document.getElementById('dt-card').innerText = s.card || "店舗へお問い合わせください";
         document.getElementById('dt-access').innerText = s.access || "駅近";
-        document.getElementById('dt-smoke').innerText = s.smoking_info || "要確認";
+        document.getElementById('dt-address').innerText = s.address || "情報なし";
         
+        const gEl = document.getElementById('dt-google');
+        if(s.google_rating) {
+            gEl.innerText = `★ ${s.google_rating} (${s.google_reviews_count || 0} 件のクチコミ)`;
+        } else {
+            gEl.innerText = "データ取得中またはクチコミなし";
+        }
+
         const photoEl = document.getElementById('dt-photo');
         if(s.photo) { photoEl.src = s.photo; photoEl.style.display = 'block'; } else { photoEl.style.display = 'none'; }
 
         const badgeBox = document.getElementById('dt-badges');
         badgeBox.innerHTML = `
+            ${s.google_rating ? `<span class="badge" style="background:#fef3c7; color:#92400e; font-weight:900;">⭐ Google ${s.google_rating}</span>` : ''}
             <span class="badge badge-primary">🏷️ ${s.genre}</span>
             <span class="badge badge-smoke">${s.smoking_info}</span>
             ${s.has_private ? '<span class="badge badge-private">🚪 個室あり</span>' : ''}
@@ -801,11 +899,17 @@ RESULT_CONTENT = """
         `;
 
         document.getElementById('dt-tel-btn').href = `tel:${s.tel}`;
-        document.getElementById('dt-hp-link').href = s.url || '#';
         document.getElementById('dt-route-btn').onclick = () => {
             closeShopDetail();
             switchToFullMap();
             drawRoute(s.lat, s.lng, s.name);
+        };
+        document.getElementById('dt-invite-btn').onclick = () => {
+            closeShopDetail();
+            openInviteModal(s);
+        };
+        document.getElementById('dt-pin-btn').onclick = () => {
+            pinReservation(s);
         };
 
         document.getElementById('detail-modal').style.display = 'flex';
@@ -941,6 +1045,9 @@ RESULT_CONTENT = """
         if(type==='price'){
             document.getElementById('sort-price').style.background='var(--primary)'; document.getElementById('sort-price').style.color='#fff';
             cards.sort((a,b)=> parseInt(a.dataset.budget||0) - parseInt(b.dataset.budget||0));
+        } else if(type==='rating'){
+            document.getElementById('sort-rating').style.background='var(--primary)'; document.getElementById('sort-rating').style.color='#fff';
+            cards.sort((a,b)=> parseFloat(b.dataset.rating||0) - parseFloat(a.dataset.rating||0));
         } else {
             document.getElementById('sort-rec').style.background='var(--primary)'; document.getElementById('sort-rec').style.color='#fff';
             cards.sort((a,b)=> parseInt(a.querySelector('.shop-name span').innerText) - parseInt(b.querySelector('.shop-name span').innerText));
@@ -951,7 +1058,7 @@ RESULT_CONTENT = """
     let targetShop = null;
     function openInviteModal(s){ doVibrate(30); targetShop = s; document.getElementById('inv-time').value = "今週 19:30〜"; document.getElementById('inv-fee').value = s.budget || "割り勘"; updateInvitePreview(); document.getElementById('invite-modal').style.display = 'flex'; }
     function closeInviteModal(){ document.getElementById('invite-modal').style.display = 'none'; }
-    function updateInvitePreview(){ if(!targetShop) return; const t = document.getElementById('inv-time').value.trim(); const f = document.getElementById('inv-fee').value.trim(); document.getElementById('inv-preview').value = `📢【お食事会のご案内】\\n\\n📅 日時: ${t}\\n🍽️ 店名: ${targetShop.name}\\n💰 予算: ${f}\\n📍 住所: ${targetShop.address}\\n🔗 詳細: ${targetShop.url}\\n\\nよろしくお願いします！✨`; }
+    function updateInvitePreview(){ if(!targetShop) return; const t = document.getElementById('inv-time').value.trim(); const f = document.getElementById('inv-fee').value.trim(); document.getElementById('inv-preview').value = `📢【お食事会のご案内】\\n\\n📅 日時: ${t}\\n🍽️ 店名: ${targetShop.name}\\n💰 予算: ${f}\\n📍 住所: ${targetShop.address}\\n\\nよろしくお願いします！✨`; }
     document.getElementById('inv-time').addEventListener('input', updateInvitePreview); document.getElementById('inv-fee').addEventListener('input', updateInvitePreview);
     function copyInviteText(){ doVibrate(30); const txt = document.getElementById('inv-preview').value; if(navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>showAppAlert("完了","案内文をコピーしました！")); else prompt("コピー:", txt); }
     function sendInviteLine(){ doVibrate(30); const txt = document.getElementById('inv-preview').value; window.open(`https://line.me/R/msg/text/?${encodeURIComponent(txt)}`, '_blank'); }
@@ -969,14 +1076,14 @@ GUIDE_CONTENT = """
     <div style="font-size:20px; font-weight:900; margin-bottom:4px;">🍽️ EAT MAP ガイド</div>
     <div style="font-size:12px; opacity:.95; line-height:1.5;">お店探し・飲み会の幹事・毎日のご飯選びを爆速＆快適にするオールインワンアプリです！</div>
 </div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>アプリ内詳細</b>：外部リンクへ飛ばず、営業時間や設備をアプリ内で一発確認。</li><li><b>⛶ 地図拡大</b>：全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>完全日本語地図</b>：公的機関の国土地理院地図（標準・淡色）をワンタップ切替。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. ダブルAIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>Groq ＋ Gemini</b>：高速無料AIの併用で定型文ゼロ化。スムーズに会話が成立します。</li><li><b>検索直結</b>：会話から最適な店舗検索キーワードをAIが自動抽出します。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. 完全アプリ内完結 ＆ Google連携</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>外部サイト離脱ゼロ</b>：別タブを開かず、営業時間や総席数・設備をアプリ内で一発閲覧。</li><li><b>Google星評価</b>：リアルな星評価（★4.3など）と口コミ件数を一覧表示。</li><li><b>ワンタップ予約</b>：アプリから直接電話予約や予約メモ固定が可能。</li><li><b>OSM-JP日本語マップ</b>：Googleマップ調の見やすい日本語地図で迷わず移動。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. ダブルAIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>Groq ＋ Gemini</b>：高速AIの併用で定型文ゼロ化。スムーズに会話が成立します。</li><li><b>検索直結</b>：会話から最適な店舗検索キーワードをAIが自動抽出します。</li></ul></div>
 <div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple);">🧮 3. おでかけ・幹事便利ツール</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>📋 グルメ記録 ＆ 星評価・メモ</b>：行ったお店に★評価と自分だけのメモを残せます。</li><li><b>⏰ 終電見張りアラーム</b>：終電時刻の30分前・15分前に通知＆振動。</li><li><b>⏱️ 退席タイマー ＆ 傾斜割り勘</b>：ラストオーダー管理や送金先付きの割り勘計算。</li></ul></div>
 <a href="/" class="btn-block btn-primary" style="margin-top:14px;">さっそく使ってみる！</a>
 </div>
 """
 
-# --- 新機能強化：グルメ記録画面 (星評価＆個別メモ対応) ---
+# --- グルメ記録画面 (星評価＆個別メモ対応) ---
 FAVORITES_CONTENT = """
 <div class="max-w">
 <div class="top-bar"><div class="brand">📋 グルメ記録</div><div style="display:flex; gap:6px;"><button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 ガチャ</button></div></div>
@@ -1020,7 +1127,6 @@ FAVORITES_CONTENT = """
                             <button class="btn-icon" style="width:22px; height:22px; min-height:22px; font-size:11px; border-radius:6px; box-shadow:none; border:none; background:var(--tag); color:var(--muted);" onclick="delFav(${i})">✕</button>
                         </div>
                         <div style="font-size:10px; color:var(--muted); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📍 ${s.address}</div>
-                        <!-- ★ 1〜5 評価 -->
                         <div style="display:flex; align-items:center; gap:2px; margin-bottom:4px;">
                             ${starsHtml}
                             <span style="font-size:10px; color:var(--muted); margin-left:4px; font-weight:800;">${rating > 0 ? rating + '.0' : '未評価'}</span>
@@ -1030,7 +1136,6 @@ FAVORITES_CONTENT = """
                 
                 ${s.visited ? `<div style="display:flex; gap:3px; margin:6px 0; overflow-x:auto;">${tags.map(t => `<span style="padding:2px 6px; font-size:9px; border-radius:6px; font-weight:800; cursor:pointer; background:${s.tag===t?'var(--yellow)':'var(--tag)'}; color:${s.tag===t?'#493800':'var(--muted)'};" onclick="setTag(${i}, '${t}')">${t}</span>`).join('')}</div>` : ''}
                 
-                <!-- 新機能：個別メモ欄 -->
                 <div style="margin-top:6px;">
                     <input type="text" value="${htmlEscape(s.memo||'')}" placeholder="📝 一言メモ (例: レモンサワー最高、奥の席が静か)" maxlength="40" style="width:100%; padding:6px 10px; border:1px solid var(--border); border-radius:8px; font-size:11px; background:var(--tag); color:var(--text); outline:none; font-weight:700;" onchange="saveMemo(${i}, this.value)">
                 </div>
@@ -1144,7 +1249,7 @@ TOOLS_CONTENT = """
 </script>
 """
 
-# --- AI相談画面 (UIバグ完全修正 ＆ 日本語Enter誤爆ガード) ---
+# --- AI相談画面 ---
 CHAT_CONTENT = """
 <style>
     .chat-container { display:flex; flex-direction:column; height:calc(100vh - 145px); max-height:800px; }
@@ -1152,9 +1257,8 @@ CHAT_CONTENT = """
     .msg-ai { background:var(--tag); border-top-left-radius:4px; color:var(--text); margin-right:auto; }
     .msg-user { background:var(--primary); border-top-right-radius:4px; color:#fff; margin-left:auto; }
     .chat-box { flex:1; overflow-y:auto; padding:14px; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:10px; display:flex; flex-direction:column; gap:12px; }
-    .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); border:none; }
+    .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); border:none; cursor:pointer; }
     
-    /* チップの圧縮バグ・スクロールバー完全修正 */
     .chip-bar { 
         display:flex; gap:8px; overflow-x:auto; padding:4px 2px 10px; margin-bottom:6px; 
         -webkit-overflow-scrolling:touch; scrollbar-width:none; -ms-overflow-style:none; 
@@ -1176,7 +1280,6 @@ CHAT_CONTENT = """
         </div>
     </div>
 
-    <!-- 横スクロール可能・圧縮ゼロのチップバー -->
     <div class="chip-bar">
         <button class="q-chip" onclick="askChip('胃に優しいもの')">🍵 胃に優しいもの</button>
         <button class="q-chip" onclick="askChip('元気になれるスタミナ料理')">🔥 元気になれるスタミナ料理</button>
@@ -1185,7 +1288,6 @@ CHAT_CONTENT = """
     </div>
 
     <div style="display:flex; gap:8px;">
-        <!-- 日本語入力確定時の誤送信ガード付き入力欄 -->
         <input type="text" id="inp" maxlength="80" placeholder="相談を入力..." style="flex:1; padding:13px 14px; border:1.5px solid var(--border); border-radius:12px; font-size:14px; background:var(--input); color:var(--text); font-weight:700; outline:none;" onkeydown="if(event.key==='Enter' && !event.isComposing) { event.preventDefault(); send(); }">
         <button class="btn-primary" style="width:64px; border-radius:12px; border:none; font-weight:800; cursor:pointer;" onclick="send()" id="s-btn">送信</button>
     </div>
@@ -1218,11 +1320,17 @@ CHAT_CONTENT = """
 </script>
 """
 
-# ================= 5. バックエンドAPI & ルーティング =================
+# ================= 6. バックエンドAPI & ルーティング =================
 
 def fetch_shops(keyword="", area="", lat=None, lng=None, smoking=False, private_room=False, free_drink=False, midnight=False, pref_fish=False, pref_meat=False, pref_spicy=False):
+    cache_key = f"{keyword}_{area}_{lat}_{lng}_{smoking}_{private_room}_{free_drink}_{midnight}_{pref_fish}_{pref_meat}_{pref_spicy}"
+    if cache_key in SEARCH_CACHE:
+        return SEARCH_CACHE[cache_key]
+
     if not HOTPEPPER_API_KEY or "ここに" in HOTPEPPER_API_KEY:
+        enrich_shops_with_google_places(DEFAULT_SHOPS)
         return DEFAULT_SHOPS
+
     params = {"key": HOTPEPPER_API_KEY, "count": 20, "format": "json"}
     if private_room: params["private_room"] = 1
     if free_drink: params["free_drink"] = 1
@@ -1255,16 +1363,39 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, smoking=False, private_
                 elif "一部禁煙" in non_sm or "分煙" in non_sm: sm_info = "🚬 分煙"
                 elif "喫煙可" in non_sm or "禁煙席なし" in non_sm: sm_info = "🚬 喫煙可"
                 else: sm_info = "🚬 喫煙可" if smoking else "🚭 禁煙"
+                
                 results.append({
-                    "name": s.get("name", "店舗名不明"), "genre": (s.get("genre") or {}).get("name", "グルメ"),
-                    "address": s.get("address", ""), "budget": b_name, "min_budget": min_b,
-                    "lat": s.get("lat"), "lng": s.get("lng"), "tel": s.get("tel", "0000000000"),
-                    "open": s.get("open", ""), "access": s.get("access", ""),
-                    "has_private": has_pr, "smoking_info": sm_info, "has_free_drink": has_fd,
-                    "url": (s.get("urls") or {}).get("pc", "#"), "photo": ((s.get("photo") or {}).get("pc") or {}).get("l", "")
+                    "name": s.get("name", "店舗名不明"),
+                    "catch": s.get("catch", ""),
+                    "genre": (s.get("genre") or {}).get("name", "グルメ"),
+                    "address": s.get("address", ""),
+                    "budget": b_name,
+                    "min_budget": min_b,
+                    "lat": s.get("lat"),
+                    "lng": s.get("lng"),
+                    "tel": s.get("tel", "0000000000"),
+                    "open": s.get("open", "要確認"),
+                    "close": s.get("close", "不定休"),
+                    "capacity": f"{s.get('capacity', '要確認')}席" if s.get('capacity') else "要確認",
+                    "card": s.get("card", "要確認"),
+                    "access": s.get("access", "駅近"),
+                    "has_private": has_pr,
+                    "smoking_info": sm_info,
+                    "has_free_drink": has_fd,
+                    "photo": ((s.get("photo") or {}).get("pc") or {}).get("l", ""),
+                    "google_rating": None,
+                    "google_reviews_count": 0
                 })
-            return results or DEFAULT_SHOPS
-    except Exception: return DEFAULT_SHOPS
+            
+            final_shops = results or DEFAULT_SHOPS
+            enrich_shops_with_google_places(final_shops)
+            
+            if len(SEARCH_CACHE) > 50: SEARCH_CACHE.clear()
+            SEARCH_CACHE[cache_key] = final_shops
+            return final_shops
+    except Exception:
+        enrich_shops_with_google_places(DEFAULT_SHOPS)
+        return DEFAULT_SHOPS
 
 @app.route('/ping')
 def ping(): return "OK", 200
@@ -1309,7 +1440,6 @@ def tools(): return render_page(TOOLS_CONTENT)
 @app.route('/chat')
 def chat(): return render_page(CHAT_CONTENT)
 
-# --- AIパイプライン高速化：Groq最優先で定型文ゼロ化 ---
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     req_json = request.get_json(silent=True) or {}
