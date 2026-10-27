@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】大量店舗スキャン × LINE共有 × カラー別ルーレット × 完全電話予約特化
+# 【EAT MAP】Google Places直接検索 × 幹事フル装備 × 視認性強化お気に入り
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math, concurrent.futures
 from collections import defaultdict
@@ -26,7 +26,7 @@ if not GEMINI_API_KEY:
                 GEMINI_API_KEY = v.strip()
                 break
 if not GEMINI_API_KEY:
-    GEMINI_API_KEY = base64.b64decode("QVEuQWI4Uk42S1EzbGtWSjctSVowSWFfNjEtdUpQaF9zT0tFUzFqNjV3WGg2bVZqc1o1bnc=").decode('utf-8')
+    GEMINI_API_KEY = base4.b64decode("QVEuQWI4Uk42S1EzbGtWSjctSVowSWFfNjEtdUpQaF9zT0tFUzFqNjV3WGg2bVZqc1o1bnc=").decode('utf-8')
 
 # ================= 1. 安全対策・キャッシュ・セキュリティ =================
 IP_LOG = defaultdict(list)
@@ -72,39 +72,70 @@ def apply_security_and_compress(res):
             res.headers['Content-Length'] = str(len(c))
     return res
 
-# ================= 2. 各種API連携エンジン =================
+# ================= 2. Google Places 直接検索 & 各種APIエンジン =================
 
-def fetch_single_google_rating(name, address):
-    if not GOOGLE_PLACES_API_KEY: return None, 0
-    clean_name = re.sub(r'\(.*?\)|（.*?）', '', name).strip()
-    cache_key = f"{clean_name}_{address[:10]}"
+# Google Places API (New) による店舗直接一括検索（Googleマップの実データを直接取得）
+def fetch_google_places_direct(query_str, lat=None, lng=None):
+    if not GOOGLE_PLACES_API_KEY or not query_str: return []
+    cache_key = f"g_direct_{query_str}_{lat}_{lng}"
     if cache_key in PLACES_CACHE: return PLACES_CACHE[cache_key]
 
-    try:
-        url = "https://places.googleapis.com/v1/places:searchText"
-        headers = {
-            "Content-Type": "application/json",
-            "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
-            "X-Goog-FieldMask": "places.displayName,places.rating,places.userRatingCount"
+    url = "https://places.googleapis.com/v1/places:searchText"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.nationalPhoneNumber,places.regularOpeningHours,places.primaryTypeDisplayName"
+    }
+    body_data = {
+        "textQuery": f"{query_str} 飲食店 レストラン グルメ".strip(),
+        "maxResultCount": 20,
+        "languageCode": "ja"
+    }
+    if lat and lng:
+        body_data["locationBias"] = {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lng},
+                "radius": 5000.0
+            }
         }
-        body = json.dumps({"textQuery": f"{clean_name} {address}".strip(), "maxResultCount": 1}).encode("utf-8")
-        req = urllib.request.Request(url, data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=2.0) as res:
+    
+    g_shops = []
+    try:
+        req = urllib.request.Request(url, data=json.dumps(body_data).encode("utf-8"), headers=headers)
+        with urllib.request.urlopen(req, timeout=3.5) as res:
             places = json.loads(res.read().decode("utf-8")).get("places", [])
-            if places:
-                r, c = places[0].get("rating"), places[0].get("userRatingCount", 0)
-                PLACES_CACHE[cache_key] = (r, c)
-                return r, c
-    except Exception: pass
-    PLACES_CACHE[cache_key] = (None, 0)
-    return None, 0
+            for p in places:
+                loc = p.get("location", {})
+                hours = p.get("regularOpeningHours", {}).get("weekdayDescriptions", [])
+                open_str = "、".join(hours[:2]) if hours else "要確認"
+                genre = (p.get("primaryTypeDisplayName") or {}).get("text", "グルメ・飲食店")
+                g_shops.append({
+                    "name": (p.get("displayName") or {}).get("text", "店舗名不明"),
+                    "catch": "Googleマップ登録店",
+                    "genre": genre,
+                    "address": p.get("formattedAddress", "").replace("日本、", ""),
+                    "budget": "要確認", "min_budget": 0,
+                    "lat": loc.get("latitude"), "lng": loc.get("longitude"),
+                    "tel": p.get("nationalPhoneNumber", "0000000000"),
+                    "open": open_str, "close": "要確認",
+                    "capacity": "要確認", "card": "要確認", "access": "周辺地域",
+                    "has_private": False, "smoking_info": "🚬/🚭 要確認", "has_free_drink": False,
+                    "photo": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600",
+                    "google_rating": p.get("rating"),
+                    "google_reviews_count": p.get("userRatingCount", 0),
+                    "source": "google"
+                })
+        PLACES_CACHE[cache_key] = g_shops
+        return g_shops
+    except Exception: return []
 
-def fetch_yahoo_local_task(keyword, lat, lng, dist=5):
+# Yahoo!ローカルサーチ
+def fetch_yahoo_local_task(keyword, lat, lng):
     if not YAHOO_CLIENT_ID: return []
     params = {"appid": YAHOO_CLIENT_ID, "output": "json", "results": 50, "gc": "01"}
     if keyword: params["query"] = keyword
     if lat and lng:
-        params["lat"], params["lon"], params["dist"] = lat, lng, dist
+        params["lat"], params["lon"], params["dist"] = lat, lng, 5
         if not keyword: params["query"] = "飲食店"
     
     try:
@@ -115,17 +146,21 @@ def fetch_yahoo_local_task(keyword, lat, lng, dist=5):
             y_shops = []
             for f in features:
                 prop = f.get("Property", {})
-                name = f.get("Name", "店舗名不明")
                 geom = f.get("Geometry", {}).get("Coordinates", "")
                 lat_str, lng_str = None, None
                 if geom and "," in geom: lng_str, lat_str = geom.split(",")
                 cat = prop.get("Genre", [])
                 genre = cat[0].get("Name", "グルメ") if cat else "グルメ"
                 y_shops.append({
-                    "name": name, "catch": prop.get("CatchCopy", ""), "genre": genre,
-                    "address": prop.get("Address", ""), "budget": "要確認", "min_budget": 0,
-                    "lat": float(lat_str) if lat_str else None, "lng": float(lng_str) if lng_str else None,
-                    "tel": prop.get("Tel1", "0000000000"), "open": "要確認", "close": "要確認",
+                    "name": f.get("Name", "店舗名不明"),
+                    "catch": prop.get("CatchCopy", ""),
+                    "genre": genre,
+                    "address": prop.get("Address", ""),
+                    "budget": "要確認", "min_budget": 0,
+                    "lat": float(lat_str) if lat_str else None,
+                    "lng": float(lng_str) if lng_str else None,
+                    "tel": prop.get("Tel1", "0000000000"),
+                    "open": "要確認", "close": "要確認",
                     "capacity": "要確認", "card": "要確認", "access": "周辺地域",
                     "has_private": False, "smoking_info": "🚬/🚭 要確認", "has_free_drink": False,
                     "photo": prop.get("Detail", {}).get("Image1", ""),
@@ -134,6 +169,7 @@ def fetch_yahoo_local_task(keyword, lat, lng, dist=5):
             return y_shops
     except Exception: return []
 
+# ホットペッパー API
 def fetch_hotpepper_task(keyword, area, lat, lng, smoking, private_room, free_drink, midnight, start_idx=1):
     if not HOTPEPPER_API_KEY: return []
     params = {"key": HOTPEPPER_API_KEY, "count": 100, "start": start_idx, "format": "json"}
@@ -182,6 +218,7 @@ def fetch_hotpepper_task(keyword, area, lat, lng, smoking, private_room, free_dr
     except Exception: pass
     return results
 
+# 楽天レシピAPI
 def fetch_rakuten_recipes(keyword):
     if not RAKUTEN_APP_ID or not keyword: return []
     clean_kw = re.sub(r'[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FA\u4E00-\u9FFF]', ' ', keyword).strip()
@@ -206,7 +243,7 @@ def fetch_rakuten_recipes(keyword):
             return recipes
     except Exception: return []
 
-# 食べログ規模の大量データ取得（ページネーション＆マルチグリッド走査）
+# Google Maps × HotPepper × Yahoo! 完全ハイブリッド大量検索
 def fetch_all_shops_massive(keyword="", area="", lat=None, lng=None, smoking=False, private_room=False, free_drink=False, midnight=False):
     cache_key = f"{keyword}_{area}_{lat}_{lng}_{smoking}_{private_room}_{free_drink}_{midnight}"
     if cache_key in SEARCH_CACHE: return SEARCH_CACHE[cache_key]
@@ -214,24 +251,26 @@ def fetch_all_shops_massive(keyword="", area="", lat=None, lng=None, smoking=Fal
     parts = [p for p in [area, keyword] if p]
     query_str = " ".join(parts) if parts else "居酒屋 グルメ"
 
-    # ホットペッパー（1〜100件、101〜200件）とYahoo!（50件）を並行取得して最大250件規模を確保
-    tasks = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        f_hp1 = executor.submit(fetch_hotpepper_task, keyword, area, lat, lng, smoking, private_room, free_drink, midnight, 1)
-        f_hp2 = executor.submit(fetch_hotpepper_task, keyword, area, lat, lng, smoking, private_room, free_drink, midnight, 101)
-        f_yh  = executor.submit(fetch_yahoo_local_task, query_str, lat, lng, 5)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        f_goog = executor.submit(fetch_google_places_direct, query_str, lat, lng)
+        f_hp1  = executor.submit(fetch_hotpepper_task, keyword, area, lat, lng, smoking, private_room, free_drink, midnight, 1)
+        f_hp2  = executor.submit(fetch_hotpepper_task, keyword, area, lat, lng, smoking, private_room, free_drink, midnight, 101)
+        f_yh   = executor.submit(fetch_yahoo_local_task, query_str, lat, lng)
         
+        goog_list = f_goog.result()
         hp1 = f_hp1.result()
         hp2 = f_hp2.result()
         yh  = f_yh.result()
 
-    all_raw = hp1 + hp2 + yh
+    # Googleの正確な実店舗を先頭にマージ
+    all_raw = goog_list + hp1 + hp2 + yh
     results = []
     existing_names = set()
     for s in all_raw:
-        if s["name"] not in existing_names:
+        clean_n = re.sub(r'\(.*?\)|（.*?）|\s+', '', s["name"])
+        if clean_n not in existing_names:
             results.append(s)
-            existing_names.add(s["name"])
+            existing_names.add(clean_n)
 
     if len(SEARCH_CACHE) > 50: SEARCH_CACHE.clear()
     SEARCH_CACHE[cache_key] = results
@@ -266,7 +305,6 @@ LAYOUT_HTML = """<!DOCTYPE html>
             document.body.appendChild(box);
         }
 
-        // LINE共有ヘルパー
         function shareToLine(text) {
             const lineUrl = `https://line.me/R/msg/text/?${encodeURIComponent(text)}`;
             window.open(lineUrl, '_blank');
@@ -312,6 +350,10 @@ LAYOUT_HTML = """<!DOCTYPE html>
         .filter-chip { background: var(--tag); border: 1.5px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; font-weight: 800; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; user-select: none; }
         .filter-chip.active { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
         
+        /* お気に入りトグルボタン（視認性強化スタイル） */
+        .fav-toggle-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 10px; font-size: 11px; font-weight: 900; border: 1.5px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; transition: all .2s; }
+        .fav-toggle-btn.is-active { background: #fee2e2; border-color: #ef4444; color: #ef4444; }
+
         .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--card); border-top: 1.5px solid var(--border); display: flex; justify-content: space-around; padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); z-index: 9000; }
         .bottom-nav a { color: var(--muted); text-decoration: none; font-size: 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-weight: 800; width: 20%; }
         .bottom-nav a.active { color: var(--primary); }
@@ -326,14 +368,14 @@ LAYOUT_HTML = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <div id="loading-overlay"><div class="spinner"></div><div id="loading-msg" style="color:#fff; font-size:13.5px; font-weight:800;">食べログ規模の店舗データを取得中...</div></div>
+    <div id="loading-overlay"><div class="spinner"></div><div id="loading-msg" style="color:#fff; font-size:13.5px; font-weight:800;">Googleマップ基準で店舗を検索中...</div></div>
     {{ content | safe }}
     <div class="bottom-nav">
         <a href="/" id="nav-home"><span class="icon">🔍</span><span>探す</span></a>
         <a href="/chat" id="nav-chat"><span class="icon">💬</span><span>相談</span></a>
         <a href="/favorites" id="nav-fav"><span class="icon">📋</span><span>記録</span></a>
         <a href="/game" id="nav-game"><span class="icon">🎯</span><span>抽選</span></a>
-        <a href="/tools" id="nav-tools"><span class="icon">🧮</span><span>ツール</span></a>
+        <a href="/tools" id="nav-tools"><span class="icon">🧮</span><span>幹事</span></a>
     </div>
     <script>
         const p = window.location.pathname;
@@ -385,7 +427,7 @@ HOME_CONTENT = """
 
     <form action="/search" method="GET" id="s-form" onsubmit="showLoad()">
         <div class="input-group"><input type="text" name="area" id="area-in" maxlength="40" placeholder="📍 エリア・駅名 (例: 姫路, 梅田)"></div>
-        <div class="input-group"><input type="text" name="keyword" id="kw-in" maxlength="40" placeholder="🔍 キーワード (例: 個室, 焼鳥, 海鮮)"></div>
+        <div class="input-group"><input type="text" name="keyword" id="kw-in" maxlength="40" placeholder="🔍 キーワード (例: 個室, 焼鳥, カフェ)"></div>
         
         <div style="font-size:12px; font-weight:800; color:var(--muted); margin:10px 0 6px;">✨ こだわり設備</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:12px;">
@@ -400,11 +442,11 @@ HOME_CONTENT = """
         <input type="checkbox" name="free_drink" id="c-drink" value="1" style="display:none;">
         <input type="checkbox" name="midnight" id="c-midnight" value="1" style="display:none;">
 
-        <button type="submit" class="btn-block btn-primary">最大250件規模で一括検索する</button>
+        <button type="submit" class="btn-block btn-primary">Googleマップ基準で一括検索する</button>
     </form>
 </div>
 <div style="font-size:11px; text-align:center; color:var(--muted); margin-top:8px;">
-    HotPepper (最大200件) ＋ Yahoo!ローカル (最大50件) のハイブリッド網羅
+    Google Places API × HotPepper × Yahoo!ローカルサーチ ハイブリッド検索
 </div>
 </div>
 <script>
@@ -416,7 +458,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索結果・地図画面（動画再生なし・電話直通・LINE共有復元） ---
+# --- 検索結果・地図画面（お気に入り視認性強化・電話直通特化） ---
 RESULT_CONTENT = """
 <div id="view-list" class="max-w">
     <div class="top-bar">
@@ -456,13 +498,16 @@ RESULT_CONTENT = """
             <img src="{{ s.photo }}" style="width:100%; height:150px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222; cursor:pointer;" loading="lazy" onclick='openShopDetailByIndex({{ loop.index0 }})'>
             {% endif %}
             
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
                 <h3 style="font-size:15px; font-weight:900; margin:0; line-height:1.3; flex:1; cursor:pointer;" onclick='openShopDetailByIndex({{ loop.index0 }})'>
                     <span style="background:var(--primary); color:#fff; font-size:11px; padding:2px 6px; border-radius:6px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}
                 </h3>
-                <div style="display:flex; gap:4px;">
-                    <button class="btn-icon" style="width:30px; height:30px; font-size:14px; border:none; background:none;" onclick='shareShopLine({{ loop.index0 }})' title="LINEで共有">💬</button>
-                    <button class="btn-icon" style="width:30px; height:30px; font-size:14px; border:none; background:none;" onclick='saveToFavDirectByIndex({{ loop.index0 }})' title="お気に入り保存">❤️</button>
+                <div style="display:flex; gap:4px; align-items:center;">
+                    <!-- 視認性抜群のお気に入りトグルボタン -->
+                    <button class="fav-toggle-btn" id="fav-btn-{{ loop.index0 }}" onclick='toggleFavByIndex({{ loop.index0 }})'>
+                        <span class="fav-icon">🤍</span><span class="fav-text">保存</span>
+                    </button>
+                    <button class="btn-icon" style="width:30px; height:30px; font-size:13px; border:none; background:var(--tag);" onclick='shareShopLine({{ loop.index0 }})' title="LINEで共有">💬</button>
                 </div>
             </div>
 
@@ -471,8 +516,12 @@ RESULT_CONTENT = """
             {% endif %}
             
             <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:6px;">
-                <span class="badge google-badge" id="g-badge-{{ loop.index0 }}" style="display:none; background:#fef3c7; color:#92400e; font-weight:900; border:1px solid #fde68a;">⭐ 取得中...</span>
-                {% if s.source == 'yahoo' %}
+                {% if s.google_rating %}
+                <span class="badge" style="background:#fef3c7; color:#92400e; font-weight:900; border:1px solid #fde68a;">⭐ Google {{ s.google_rating }} ({{ s.google_reviews_count }}件)</span>
+                {% endif %}
+                {% if s.source == 'google' %}
+                <span class="badge" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;">🗺️ Google Places</span>
+                {% elif s.source == 'yahoo' %}
                 <span class="badge" style="background:#e0f2fe; color:#0284c7; border:1px solid #bae6fd;">🔎 Yahoo!個人店</span>
                 {% else %}
                 <span class="badge" style="background:#fce7f3; color:#be185d;">🔥 ホットペッパー</span>
@@ -492,7 +541,7 @@ RESULT_CONTENT = """
     </div>
 </div>
 
-<!-- アプリ内完結：店舗詳細シート（動画なし・電話直通特化・LINE共有ボタン付き） -->
+<!-- アプリ内完結：店舗詳細シート（お気に入りトグル & 電話直通） -->
 <div id="detail-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:flex-end; align-items:center; padding:14px; flex-direction:column;">
     <div class="card" style="width:100%; max-width:440px; max-height:88vh; display:flex; flex-direction:column; margin:0; background:var(--card); padding:16px;">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
@@ -504,11 +553,10 @@ RESULT_CONTENT = """
             <img id="dt-photo" src="" style="width:100%; height:190px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222; display:none;">
             <div id="dt-catch" style="font-size:12px; font-weight:800; color:var(--primary); margin-bottom:10px; line-height:1.5;"></div>
             
-            <!-- 上部直通電話ボタン -->
             <a href="#" id="dt-top-tel" class="btn-block btn-green" style="justify-content:center; font-size:15px; margin-bottom:10px;">📞 店舗に電話予約する</a>
 
             <div style="font-size:12px; line-height:1.8; background:var(--tag); padding:14px; border-radius:14px; margin-bottom:12px;">
-                <div style="margin-bottom:6px;"><b>⭐ Google星評価:</b> <span id="dt-google" style="color:#d97706; font-weight:900;">取得中...</span></div>
+                <div style="margin-bottom:6px;"><b>⭐ Google星評価:</b> <span id="dt-google" style="color:#d97706; font-weight:900;">--</span></div>
                 <div style="margin-bottom:6px;"><b>💰 予算目安:</b> <span id="dt-budget">--</span></div>
                 <div style="margin-bottom:6px;"><b>🕒 営業時間:</b> <span id="dt-open">--</span></div>
                 <div style="margin-bottom:6px;"><b>🎌 定休日:</b> <span id="dt-close">--</span></div>
@@ -520,8 +568,8 @@ RESULT_CONTENT = """
         </div>
 
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+            <button id="dt-modal-fav-btn" class="btn-block btn-sub" style="margin:0; min-height:44px; font-size:13px; justify-content:center;" onclick="toggleCurrentModalFav()">🤍 保存</button>
             <button id="dt-line-btn" class="btn-block btn-line" style="margin:0; min-height:44px; font-size:13px; justify-content:center;">💬 LINEで共有</button>
-            <button onclick="closeShopDetail()" class="btn-block btn-sub" style="margin:0; min-height:44px; font-size:13px;">閉じる</button>
         </div>
     </div>
 </div>
@@ -532,7 +580,7 @@ RESULT_CONTENT = """
     let markers = [];
     let uLat = null, uLng = null;
     let isSorted = false;
-    let currentDetailShop = null;
+    let currentDetailIdx = null;
 
     window.addEventListener('DOMContentLoaded', () => {
         const defaultLat = (shops.length>0 && shops[0].lat) ? shops[0].lat : 34.8290;
@@ -545,6 +593,7 @@ RESULT_CONTENT = """
         }).addTo(map);
 
         renderMarkers();
+        syncFavButtons();
 
         if(navigator.geolocation){
             navigator.geolocation.getCurrentPosition(pos => {
@@ -563,9 +612,62 @@ RESULT_CONTENT = """
                 if(bounds.length > 0) map.fitBounds(bounds, {padding:[15,15]});
             }, {timeout:5000});
         }
-
-        loadRatingsInBackground();
     });
+
+    // お気に入り状態の画面全反映ロジック
+    function syncFavButtons() {
+        const favs = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
+        const favNames = new Set(favs.map(f => f.name));
+
+        shops.forEach((s, idx) => {
+            const btn = document.getElementById(`fav-btn-${idx}`);
+            if(!btn) return;
+            const isFav = favNames.has(s.name);
+            if(isFav) {
+                btn.classList.add('is-active');
+                btn.querySelector('.fav-icon').innerText = '❤️';
+                btn.querySelector('.fav-text').innerText = '保存済';
+            } else {
+                btn.classList.remove('is-active');
+                btn.querySelector('.fav-icon').innerText = '🤍';
+                btn.querySelector('.fav-text').innerText = '保存';
+            }
+        });
+
+        // モーダル内のボタン更新
+        if(currentDetailIdx !== null) {
+            const modalBtn = document.getElementById('dt-modal-fav-btn');
+            const isFav = favNames.has(shops[currentDetailIdx].name);
+            modalBtn.className = isFav ? "btn-block btn-primary" : "btn-block btn-sub";
+            modalBtn.innerHTML = isFav ? "❤️ 保存済み (解除)" : "🤍 お気に入りに保存";
+        }
+    }
+
+    function toggleFavByIndex(idx) {
+        doVibrate(35);
+        const s = shops[idx];
+        let favs = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
+        const existingIdx = favs.findIndex(f => f.name === s.name);
+
+        if(existingIdx >= 0) {
+            favs.splice(existingIdx, 1);
+            showAppAlert("解除完了", `【${s.name}】をお気に入りから解除しました。`);
+        } else {
+            favs.unshift({
+                name: s.name, genre: s.genre, address: s.address, photo: s.photo,
+                visited: false, rating: s.google_rating || 0, memo: "", tag: ""
+            });
+            showAppAlert("保存完了！", `【${s.name}】をお気に入りに保存しました❤️`);
+        }
+        localStorage.setItem('eatmap_favs', JSON.stringify(favs));
+        syncFavButtons();
+    }
+
+    function toggleCurrentModalFav() {
+        if(currentDetailIdx !== null) {
+            toggleFavByIndex(currentDetailIdx);
+        }
+    }
 
     function renderMarkers(filteredIndices = null) {
         markers.forEach(m => map.removeLayer(m));
@@ -583,29 +685,6 @@ RESULT_CONTENT = """
                 markers.push(m);
             }
         });
-    }
-
-    async function loadRatingsInBackground() {
-        const topShops = shops.slice(0, 30).map((s, idx) => ({index: idx, name: s.name, address: s.address}));
-        try {
-            const res = await fetch('/api/places_enrich', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({shops: topShops})
-            });
-            const data = await res.json();
-            data.forEach(item => {
-                if(item.rating) {
-                    shops[item.index].google_rating = item.rating;
-                    shops[item.index].google_reviews_count = item.count;
-                    const b = document.getElementById(`g-badge-${item.index}`);
-                    if(b) {
-                        b.innerText = `⭐ Google ${item.rating} (${item.count}件)`;
-                        b.style.display = 'inline-flex';
-                    }
-                }
-            });
-        } catch(e) {}
     }
 
     function filterShops(val) {
@@ -654,8 +733,8 @@ RESULT_CONTENT = """
     }
 
     function openShopDetailByIndex(idx) {
+        currentDetailIdx = idx;
         const s = shops[idx];
-        currentDetailShop = s;
         document.getElementById('dt-name').innerText = s.name;
         document.getElementById('dt-catch').innerText = s.catch ? `「${s.catch}」` : '';
         document.getElementById('dt-budget').innerText = s.budget || "要確認";
@@ -670,7 +749,7 @@ RESULT_CONTENT = """
         if(s.google_rating) {
             gEl.innerText = `★ ${s.google_rating} (${s.google_reviews_count || 0} 件のクチコミ)`;
         } else {
-            gEl.innerText = "データ取得中またはクチコミなし";
+            gEl.innerText = "情報なし";
         }
 
         const photoEl = document.getElementById('dt-photo');
@@ -682,33 +761,20 @@ RESULT_CONTENT = """
             shareToLine(shareText);
         };
 
+        syncFavButtons();
         document.getElementById('detail-modal').style.display = 'flex';
         if(s.lat && s.lng) map.panTo([s.lat, s.lng]);
     }
 
     function closeShopDetail() {
         document.getElementById('detail-modal').style.display = 'none';
+        currentDetailIdx = null;
     }
 
     function shareShopLine(idx) {
         const s = shops[idx];
         const shareText = `【EAT MAP】ここはどう？\\n店名: ${s.name}\\nジャンル: ${s.genre}\\n住所: ${s.address}\\n電話: ${s.tel}`;
         shareToLine(shareText);
-    }
-
-    function saveToFavDirectByIndex(idx) {
-        const s = shops[idx];
-        let f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
-        if(f.some(x => x.name === s.name)){
-            showAppAlert("ご案内", "すでにお気に入りに保存されています！");
-            return;
-        }
-        f.unshift({
-            name: s.name, genre: s.genre, address: s.address, photo: s.photo,
-            visited: false, rating: 0, memo: "", tag: ""
-        });
-        localStorage.setItem('eatmap_favs', JSON.stringify(f));
-        showAppAlert("保存完了！", `【${s.name}】をお気に入りに追加しました📋`);
     }
 </script>
 """
@@ -740,7 +806,7 @@ FAVORITES_CONTENT = """
         const eR = Math.min(100, Math.max(5, ((vCount - cur.count) / Math.max(1, (nxtC - cur.count))) * 100));
         document.getElementById('exp-text').innerText = `次まで あと${Math.max(0, nxtC - vCount)}軒`; document.getElementById('exp-bar').style.width = eR + '%';
         
-        if(f.length===0){ list.innerHTML = `<div class="card" style="text-align:center; color:var(--muted); font-weight:700; padding:30px 10px;">保存したお店がまだありません。検索結果の「❤️」ボタンで追加できます！</div>`; return; }
+        if(f.length===0){ list.innerHTML = `<div class="card" style="text-align:center; color:var(--muted); font-weight:700; padding:30px 10px;">保存したお店がまだありません。検索結果の「🤍 保存」ボタンで追加できます！</div>`; return; }
         const tags = ["😋絶品", "🔥コスパ", "🍺酒進む", "✨雰囲気"];
         
         list.innerHTML = f.map((s,i)=>{
@@ -788,7 +854,7 @@ FAVORITES_CONTENT = """
 </script>
 """
 
-# --- 抽選画面（カラー別ルーレットカスタム＆LINE共有復元） ---
+# --- 抽選・カラー別ルーレット画面 ---
 GAME_CONTENT = """
 <div class="max-w">
 <div class="top-bar"><div class="brand">🎯 抽選・診断</div></div>
@@ -812,11 +878,9 @@ GAME_CONTENT = """
     </div>
 </div>
 
-<!-- カラー別直感カスタムUI -->
 <div class="card">
     <div style="font-size:13px; font-weight:900; color:var(--text); margin-bottom:4px;">🎨 ルーレット項目のカラー別編集</div>
     <div style="font-size:11px; color:var(--muted); margin-bottom:12px;">それぞれの色に対応するジャンルや店名を自由に変更できます。</div>
-    
     <div id="color-slots" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;"></div>
     <button class="btn-block btn-sub" style="margin-top:10px;" onclick="saveCustomWheel()">盤面を保存して更新</button>
 </div>
@@ -918,11 +982,12 @@ GAME_CONTENT = """
 </script>
 """
 
-# --- おでかけツール画面 ---
+# --- 幹事フル装備画面（割り勘OCR・タイマー・集金・席替え） ---
 TOOLS_CONTENT = """
 <div class="max-w">
-<div class="top-bar"><div class="brand">🧮 おでかけツール</div></div>
+<div class="top-bar"><div class="brand">🧮 幹事お助けツール</div></div>
 
+<!-- 飲み放題・コース退席タイマー -->
 <div class="card" style="border-color:var(--yellow);">
     <div style="font-size:12px; font-weight:800; color:var(--yellow); margin-bottom:8px;">⏳ 飲み放題・コース退席タイマー</div>
     <div style="display:flex; gap:6px;">
@@ -934,15 +999,7 @@ TOOLS_CONTENT = """
     <div id="timer-status" style="font-size:11px; font-weight:800; color:var(--muted); margin-top:6px;">未稼働</div>
 </div>
 
-<div class="card" style="border-color:var(--purple);">
-    <div style="font-size:12px; font-weight:800; color:var(--purple); margin-bottom:8px;">⏰ 終電見張りアラーム</div>
-    <div style="display:flex; gap:6px; align-items:center;">
-        <input type="time" id="train-time" style="padding:8px 10px; border:1.5px solid var(--border); border-radius:10px; font-size:14px; font-weight:800; background:var(--input); color:var(--text); outline:none;">
-        <button class="btn-sm btn-purple" style="flex:1; justify-content:center;" onclick="setTrainAlarm()">セット</button>
-    </div>
-    <div id="train-status" style="font-size:11px; font-weight:800; color:var(--muted); margin-top:6px;">未設定</div>
-</div>
-
+<!-- 傾斜割り勘計算 ＆ レシートOCR -->
 <div class="card">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <span style="font-size:12px; font-weight:800; color:var(--muted);">💸 傾斜割り勘計算</span>
@@ -964,6 +1021,34 @@ TOOLS_CONTENT = """
         <div style="display:flex; justify-content:space-between; margin-bottom:10px;"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
         <button class="btn-block btn-line" style="margin:0;" onclick="shareSplitLine()">💬 割り勘結果をLINEで送る</button>
     </div>
+</div>
+
+<!-- 幹事用：集金チェックリスト -->
+<div class="card" style="border-color:var(--green);">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <span style="font-size:12px; font-weight:800; color:var(--green);">📋 参加費・集金チェッカー</span>
+        <button class="btn-sm btn-sub" onclick="addMemberPrompt()">＋ メンバー追加</button>
+    </div>
+    <div id="member-list" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;"></div>
+    <div style="font-size:11px; font-weight:800; color:var(--muted); text-align:right;" id="collection-summary">集金済: 0 / 0 名</div>
+</div>
+
+<!-- 宴会・合コン用：席決めシャッフル -->
+<div class="card" style="border-color:var(--blue);">
+    <div style="font-size:12px; font-weight:800; color:var(--blue); margin-bottom:8px;">🔀 席替え・席決めシャッフル</div>
+    <div class="input-group"><input type="text" id="seat-names" value="幹事, Aさん, Bさん, Cさん, Dさん, Eさん" placeholder="参加者名をカンマ区切りで入力"></div>
+    <button class="btn-block btn-sub" onclick="shuffleSeats()">ランダムに席を決める！</button>
+    <div id="seat-res" style="display:none; background:var(--tag); padding:10px; border-radius:10px; margin-top:8px; font-size:12px; font-weight:800; line-height:1.6;"></div>
+</div>
+
+<!-- 終電見張りアラーム -->
+<div class="card" style="border-color:var(--purple);">
+    <div style="font-size:12px; font-weight:800; color:var(--purple); margin-bottom:8px;">⏰ 終電見張りアラーム</div>
+    <div style="display:flex; gap:6px; align-items:center;">
+        <input type="time" id="train-time" style="padding:8px 10px; border:1.5px solid var(--border); border-radius:10px; font-size:14px; font-weight:800; background:var(--input); color:var(--text); outline:none;">
+        <button class="btn-sm btn-purple" style="flex:1; justify-content:center;" onclick="setTrainAlarm()">セット</button>
+    </div>
+    <div id="train-status" style="font-size:11px; font-weight:800; color:var(--muted); margin-top:6px;">未設定</div>
 </div>
 </div>
 <script>
@@ -988,13 +1073,6 @@ TOOLS_CONTENT = """
         document.getElementById('timer-status').style.color = "var(--muted)";
     }
 
-    function setTrainAlarm(){ 
-        const val = document.getElementById('train-time').value; if(!val) return showAppAlert("エラー", "時刻を選択してください"); 
-        document.getElementById('train-status').innerText = `【${val}】にセットしました`; 
-        document.getElementById('train-status').style.color = "var(--purple)";
-        showAppAlert("完了", `終電を【${val}】にセットしました！`); 
-    }
-
     let lastSplitData = null;
     function calcSplit() { 
         const tot = parseInt(document.getElementById('split-total').value)||0, dr = parseInt(document.getElementById('split-drinkers').value)||0, ndr = parseInt(document.getElementById('split-nondrinkers').value)||0, disc = parseInt(document.getElementById('split-discount').value)||0; 
@@ -1010,6 +1088,68 @@ TOOLS_CONTENT = """
         if(!lastSplitData) return;
         const text = `【お会計・割り勘計算】\\n合計: ¥${lastSplitData.total.toLocaleString()}\\n🍺 飲む人 (${lastSplitData.drCount}名): 各 ¥${lastSplitData.drinker.toLocaleString()}\\n🍵 飲まない人 (${lastSplitData.ndrCount}名): 各 ¥${lastSplitData.nonDrinker.toLocaleString()}\\nよろしくお願いします！✨`;
         shareToLine(text);
+    }
+
+    // 集金チェッカー
+    let members = JSON.parse(localStorage.getItem('eatmap_members') || '["参加者A", "参加者B", "参加者C"]');
+    let paidStatus = JSON.parse(localStorage.getItem('eatmap_paid') || '{}');
+
+    function renderMembers() {
+        const box = document.getElementById('member-list');
+        box.innerHTML = members.map((m, i) => `
+            <div style="display:flex; justify-content:space-between; align-items:center; background:var(--tag); padding:6px 10px; border-radius:8px;">
+                <span style="font-size:12px; font-weight:800;">${m}</span>
+                <div style="display:flex; gap:6px;">
+                    <button class="btn-sm ${paidStatus[m] ? 'btn-green':'btn-sub'}" style="padding:4px 8px; font-size:10px; border:none;" onclick="togglePaid('${m}')">${paidStatus[m] ? '✓ 支払済':'未払'}</button>
+                    <button class="btn-icon" style="width:20px; height:20px; font-size:10px; border:none;" onclick="delMember(${i})">✕</button>
+                </div>
+            </div>
+        `).join('');
+        const paidCount = members.filter(m => paidStatus[m]).length;
+        document.getElementById('collection-summary').innerText = `集金済: ${paidCount} / ${members.length} 名`;
+    }
+
+    function togglePaid(m) {
+        paidStatus[m] = !paidStatus[m];
+        localStorage.setItem('eatmap_paid', JSON.stringify(paidStatus));
+        renderMembers();
+    }
+
+    function addMemberPrompt() {
+        const name = prompt("追加する参加者の名前を入力してください:");
+        if(name && name.trim()) {
+            members.push(name.trim());
+            localStorage.setItem('eatmap_members', JSON.stringify(members));
+            renderMembers();
+        }
+    }
+
+    function delMember(idx) {
+        members.splice(idx, 1);
+        localStorage.setItem('eatmap_members', JSON.stringify(members));
+        renderMembers();
+    }
+
+    // 席替えシャッフル
+    function shuffleSeats() {
+        doVibrate(30);
+        const raw = document.getElementById('seat-names').value;
+        const arr = raw.split(',').map(s=>s.trim()).filter(Boolean);
+        if(arr.length < 2) return showAppAlert("エラー", "2名以上の名前を入力してください");
+        for(let i = arr.length - 1; i > 0; i--){
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        const resBox = document.getElementById('seat-res');
+        resBox.innerHTML = arr.map((name, i) => `<b>席番 ${i+1}:</b> ${name}`).join('<br>');
+        resBox.style.display = 'block';
+    }
+
+    function setTrainAlarm(){ 
+        const val = document.getElementById('train-time').value; if(!val) return showAppAlert("エラー", "時刻を選択してください"); 
+        document.getElementById('train-status').innerText = `【${val}】にセットしました`; 
+        document.getElementById('train-status').style.color = "var(--purple)";
+        showAppAlert("完了", `終電を【${val}】にセットしました！`); 
     }
 
     async function ocrReceipt(input) {
@@ -1043,6 +1183,8 @@ TOOLS_CONTENT = """
         };
         reader.readAsDataURL(file);
     }
+
+    window.addEventListener('DOMContentLoaded', renderMembers);
 </script>
 """
 
@@ -1126,7 +1268,6 @@ def search():
         lng_val = float(request.args.get('lng')) if request.args.get('lng') else None
     except (ValueError, TypeError): lat_val, lng_val = None, None
 
-    # 並行処理で店舗大量取得 ＆ 楽天レシピ比較取得
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         f_shops = executor.submit(fetch_all_shops_massive, k, a, lat_val, lng_val, smoking, private_room, free_drink, midnight)
         f_recipes = executor.submit(fetch_rakuten_recipes, k or a or "肉")
@@ -1136,27 +1277,6 @@ def search():
     title = f"{a} {k}".strip() or "おすすめ店舗"
     content = render_template_string(RESULT_CONTENT, shops=shops, search_title=title, recipes=recipes)
     return render_page(content)
-
-# Google Places 評価の遅延注入エンドポイント
-@app.route('/api/places_enrich', methods=['POST'])
-def api_places_enrich():
-    req_json = request.get_json(silent=True) or {}
-    items = req_json.get('shops', [])
-    if not items or not GOOGLE_PLACES_API_KEY:
-        return jsonify([])
-
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        future_map = {executor.submit(fetch_single_google_rating, s.get('name',''), s.get('address','')): s for s in items}
-        for future in concurrent.futures.as_completed(future_map):
-            target = future_map[future]
-            try:
-                r, c = future.result()
-                if r:
-                    results.append({"index": target.get('index'), "rating": r, "count": c})
-            except Exception: pass
-
-    return jsonify(results)
 
 # レシートOCR解析API
 @app.route('/api/ocr', methods=['POST'])
