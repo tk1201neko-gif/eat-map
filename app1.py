@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】国土地理院ハイブリッド地図 ＆ 無停止AI対話エンジン 完全統合版 app1.py
+# 【EAT MAP】Gemini ＋ Groq ＋ 国土地理院ハイブリッド地図 完全統合版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
 from collections import defaultdict
@@ -13,6 +13,8 @@ app = Flask(__name__)
 
 # --- APIキーの設定 ---
 HOTPEPPER_API_KEY = os.environ.get("HOTPEPPER_API_KEY", "").strip()
+GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "").strip()
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     for k, v in os.environ.items():
@@ -37,7 +39,7 @@ def firewall():
     if len(IP_LOG) > 2000:
         for k in list(IP_LOG.keys()):
             if not IP_LOG[k]: del IP_LOG[k]
-    if len(IP_LOG[ip]) >= 100: 
+    if len(IP_LOG) >= 100: 
         return "アクセス過多です。", 429
     IP_LOG[ip].append(now)
 
@@ -51,7 +53,7 @@ def apply_security_and_compress(res):
         "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:; "
         "img-src 'self' https: data: blob:; "
         "font-src 'self' https: data:; "
-        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://*.openstreetmap.org https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp https://router.project-osrm.org;"
+        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://api.groq.com https://*.openstreetmap.org https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp https://router.project-osrm.org;"
     )
     if res.content_type and 'text/html' in res.content_type:
         res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -407,7 +409,7 @@ RESULT_CONTENT = """
         <button class="btn-sm sort-tab" id="sort-price" style="flex:1; justify-content:center;" onclick="sortShops('price')">💰 予算が安い順</button>
     </div>
 
-    <!-- 通常マッププレビュー（右上に⛶拡大ボタン、切り替えボタン） -->
+    <!-- 通常マッププレビュー（右上に⛶拡大ボタン） -->
     <div style="position:relative; margin-bottom:12px;">
         <div id="map-preview" style="height:220px; width:100%; border-radius:14px; border:1.5px solid var(--border); box-shadow:var(--shadow);"></div>
         <button onclick="switchToFullMap()" style="position:absolute; top:10px; right:10px; z-index:1000; background:var(--card); border:1.5px solid var(--border); border-radius:10px; padding:6px 12px; font-size:12px; font-weight:900; box-shadow:0 2px 8px rgba(0,0,0,0.2); cursor:pointer; color:var(--text); display:flex; align-items:center; gap:4px;">⛶ 地図を拡大</button>
@@ -752,7 +754,7 @@ RESULT_CONTENT = """
                 html:`<div style="position:relative; width:16px; height:16px;">
                         <div id="user-vision" style="position:absolute; top:-24px; left:-12px; width:0; height:0; border-left:20px solid transparent; border-right:20px solid transparent; border-bottom:40px solid rgba(59,130,246,0.25); transform-origin: center bottom; border-radius:40px 40px 0 0; transition: transform 0.2s;"></div>
                         <div style="background:#3b82f6; width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 0 4px rgba(59,130,246,0.3); position:absolute; z-index:2; animation: pulse 2s infinite;"></div>
-                      </div><style>@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } 70% { box-shadow: 0 0 0 15px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }</style>`,
+                      </div><style>@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } 70% { box-shadow: 0 0 0 15px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } }</style>`,
                 iconSize:[16,16], iconAnchor:[8,8]
             });
             userMarker = L.marker([uLat, uLng], {icon: curIcon, zIndexOffset:1000}).addTo(mapFull);
@@ -851,8 +853,8 @@ GUIDE_CONTENT = """
     <div style="font-size:20px; font-weight:900; margin-bottom:4px;">🍽️ EAT MAP ガイド</div>
     <div style="font-size:12px; opacity:.95; line-height:1.5;">お店探し・飲み会の幹事・毎日のご飯選びを爆速＆快適にするオールインワンアプリです！</div>
 </div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>通常リスト</b>：見やすい縦スクロールでお店を比較。</li><li><b>⛶ 地図拡大</b>：ボタンを押すと全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. 爆速AIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>AIが自動提案</b>：質問すると最適な検索キーワードをAIが作り出し、一発でお店を案内。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>通常リスト</b>：見やすい縦スクロールでお店を比較。</li><li><b>⛶ 地図拡大</b>：ボタンを押すと全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>🗾 地図切替</b>：国土地理院の淡色地図（見やすさ抜群）とOpenStreetMapをワンタップ切替。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. ダブルAIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>Gemini ＋ Groq</b>：2つの無料AIを併用し、途切れることなく自然な会話を実現。</li><li><b>検索直結</b>：会話から最適な店舗検索キーワードをAIが自動抽出します。</li></ul></div>
 <div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple);">🧮 3. おでかけ・幹事便利ツール</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>⏰ 終電見張りアラーム</b>：終電時刻の30分前・15分前に通知＆振動。解除も可能。</li><li><b>⏱️ 退席タイマー ＆ 傾斜割り勘</b>：ラストオーダー管理や送金先付きの割り勘計算。</li></ul></div>
 <a href="/" class="btn-block btn-primary" style="margin-top:14px;">さっそく使ってみる！</a>
 </div>
@@ -1000,7 +1002,7 @@ CHAT_CONTENT = """
 <style>.msg { max-width:85%; padding:10px 14px; border-radius:16px; font-size:13.5px; font-weight:700; line-height:1.6; word-wrap:break-word; } .msg-ai { background:var(--tag); border-top-left-radius:4px; color:var(--text); margin-right:auto; } .msg-user { background:var(--primary); border-top-right-radius:4px; color:#fff; margin-left:auto; } .chat-box { display:flex; flex-direction:column; gap:12px; padding:14px; overflow-y:auto; height:52vh; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:10px; } .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); border:none; } .chip-bar { display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; margin-bottom:8px; -webkit-overflow-scrolling:touch; } .q-chip { background:var(--tag); border:1.5px solid var(--border); border-radius:16px; padding:6px 12px; font-size:11.5px; font-weight:800; color:var(--text); white-space:nowrap; cursor:pointer; }</style>
 <div class="max-w">
 <div class="top-bar"><div class="brand">💬 AIコンシェルジュ</div></div>
-<div class="chat-box" id="box"><div style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai">お店探しのお手伝いをします✨<br>「胃に優しいものが食べたい」「深夜のラーメン」など、何でも聞いてください！</div></div></div>
+<div class="chat-box" id="box"><div style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai">お店探しのお手伝いをします✨<br>「胃に優しいものが食べたい」「元気が出そうなお肉」など何でも相談してください！</div></div></div>
 <div class="chip-bar"><button class="q-chip" onclick="askChip('胃に優しいもの')">🍵 胃に優しいもの</button><button class="q-chip" onclick="askChip('元気になれるスタミナ料理')">🔥 元気が出るスタミナ</button><button class="q-chip" onclick="askChip('姫路駅近くで喫煙できる個室居酒屋')">🚬 喫煙可の個室居酒屋</button><button class="q-chip" onclick="askChip('深夜営業しているおすすめシメ飯')">🍜 深夜の背徳シメ飯</button></div>
 <div style="display:flex; gap:8px;"><input type="text" id="inp" maxlength="80" placeholder="相談を入力..." style="flex:1; padding:13px 14px; border:1.5px solid var(--border); border-radius:12px; font-size:14px; background:var(--input); color:var(--text); font-weight:700; outline:none;" onkeypress="if(event.key==='Enter') send()"><button class="btn-primary" style="width:60px; border-radius:12px; border:none; font-weight:800; cursor:pointer;" onclick="send()" id="s-btn">送信</button></div>
 </div>
@@ -1132,45 +1134,74 @@ def api_chat():
     if msg in AI_CACHE:
         return jsonify(AI_CACHE[msg])
         
-    key = GEMINI_API_KEY
     clean_reply = None
     search_keyword = None
 
-    # --- 1. Gemini API呼び出し (AQ.キー両対応) ---
-    if key:
-        prompt = (
-            f"あなたは飲食店探しアプリ「EAT MAP」の親身な専属コンシェルジュです。"
-            f"ユーザーの言葉「{msg}」に日本語敬語で寄り添い、具体的な料理やお店の選び方を80文字以内で親切に提案してください。"
-            f"返答の最後に店舗検索に最適なキーワードを「【SEARCH:キーワード】」という形式で必ず1つ付けてください。"
-        )
-        payload = json.dumps({
+    prompt = (
+        f"あなたは飲食店探しアプリ「EAT MAP」の親身な専属コンシェルジュです。"
+        f"ユーザーの言葉「{msg}」に日本語敬語で寄り添い、具体的な料理やお店の選び方を80文字以内で親切に提案してください。"
+        f"返答の最後に店舗検索に最適なキーワードを「【SEARCH:キーワード】」という形式で必ず1つ付けてください。"
+    )
+
+    # --- 1. Gemini API呼び出し (第1候補) ---
+    if GEMINI_API_KEY:
+        gemini_payload = json.dumps({
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"maxOutputTokens": 120, "temperature": 0.5}
         }).encode('utf-8')
         
-        headers = {'Content-Type': 'application/json', 'x-goog-api-key': key, 'User-Agent': 'Mozilla/5.0'}
-        models = ["gemini-1.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]
-        
-        for model_name in models:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(key)}"
+        headers = {'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY, 'User-Agent': 'Mozilla/5.0'}
+        for model_name in ["gemini-1.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(GEMINI_API_KEY)}"
             try:
-                req = urllib.request.Request(url, data=payload, headers=headers)
-                with urllib.request.urlopen(req, timeout=8) as res:
+                req = urllib.request.Request(url, data=gemini_payload, headers=headers)
+                with urllib.request.urlopen(req, timeout=5) as res:
                     r_data = json.loads(res.read().decode('utf-8'))
                     raw_text = r_data['candidates'][0]['content']['parts'][0]['text']
-                    
-                    # キーワード抽出
                     kw_match = re.search(r'【SEARCH:(.*?)】', raw_text)
                     if kw_match:
                         search_keyword = kw_match.group(1).strip()
                         raw_text = re.sub(r'【SEARCH:.*?】', '', raw_text)
-                    
                     clean_reply = raw_text.replace("**", "").replace("*", "").strip()
                     if clean_reply: break
             except Exception:
                 continue
 
-    # --- 2. 内蔵スマート対話エンジン (フォールバック) ---
+    # --- 2. Groq API呼び出し (第2候補・完全無料高速AI) ---
+    if not clean_reply and GROQ_API_KEY:
+        groq_payload_dict = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": "あなたは飲食店探しアプリ「EAT MAP」の親身な専属コンシェルジュです。ユーザーの言葉に寄り添い、具体的な料理やお店の選び方を80文字以内で親切に提案してください。返答の最後に店舗検索に最適なキーワードを「【SEARCH:キーワード】」という形式で必ず1つ付けてください。"},
+                {"role": "user", "content": msg}
+            ],
+            "max_tokens": 120,
+            "temperature": 0.5
+        }
+        
+        groq_headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {GROQ_API_KEY}',
+            'User-Agent': 'Mozilla/5.0'
+        }
+        
+        for g_model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            try:
+                groq_payload_dict["model"] = g_model
+                req = urllib.request.Request("https://api.groq.com/openai/v1/chat/completions", data=json.dumps(groq_payload_dict).encode('utf-8'), headers=groq_headers)
+                with urllib.request.urlopen(req, timeout=5) as res:
+                    g_res = json.loads(res.read().decode('utf-8'))
+                    raw_text = g_res['choices'][0]['message']['content']
+                    kw_match = re.search(r'【SEARCH:(.*?)】', raw_text)
+                    if kw_match:
+                        search_keyword = kw_match.group(1).strip()
+                        raw_text = re.sub(r'【SEARCH:.*?】', '', raw_text)
+                    clean_reply = raw_text.replace("**", "").replace("*", "").strip()
+                    if clean_reply: break
+            except Exception:
+                continue
+
+    # --- 3. 内蔵スマート対話エンジン (第3候補・安全ネット) ---
     if not clean_reply:
         m_lower = msg.lower()
         if any(w in m_lower for w in ["胃", "優し", "消化", "あっさり", "お腹", "調子悪"]):
