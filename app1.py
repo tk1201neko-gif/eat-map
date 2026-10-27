@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】Gemini ＋ Groq ＋ 国土地理院ハイブリッド地図 完全統合版 app1.py
+# 【EAT MAP】Mapbox対応 ＆ Gemini＋GroqダブルAI搭載 完全統合版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
 from collections import defaultdict
@@ -12,8 +12,9 @@ socket.getaddrinfo = lambda *args, **kwargs: [r for r in _orig_gai(*args, **kwar
 app = Flask(__name__)
 
 # --- APIキーの設定 ---
-HOTPEPPER_API_KEY = os.environ.get("HOTPEPPER_API_KEY", "").strip()
-GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "").strip()
+HOTPEPPER_API_KEY   = os.environ.get("HOTPEPPER_API_KEY", "").strip()
+GROQ_API_KEY        = os.environ.get("GROQ_API_KEY", "").strip()
+MAPBOX_ACCESS_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN", "").strip()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
@@ -39,7 +40,7 @@ def firewall():
     if len(IP_LOG) > 2000:
         for k in list(IP_LOG.keys()):
             if not IP_LOG[k]: del IP_LOG[k]
-    if len(IP_LOG) >= 100: 
+    if len(IP_LOG[ip]) >= 100: 
         return "アクセス過多です。", 429
     IP_LOG[ip].append(now)
 
@@ -53,7 +54,7 @@ def apply_security_and_compress(res):
         "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:; "
         "img-src 'self' https: data: blob:; "
         "font-src 'self' https: data:; "
-        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://api.groq.com https://*.openstreetmap.org https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp https://router.project-osrm.org;"
+        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://api.groq.com https://*.openstreetmap.org https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp https://api.mapbox.com https://*.tiles.mapbox.com https://router.project-osrm.org;"
     )
     if res.content_type and 'text/html' in res.content_type:
         res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -174,11 +175,6 @@ LAYOUT_HTML = """<!DOCTYPE html>
         [data-theme="light"] .btn-sub .ripple-anim, [data-theme="light"] .btn-icon .ripple-anim { background: rgba(0,0,0,0.1); }
         @keyframes ripple-run { to { transform: scale(3); opacity: 0; } }
 
-        /* ナイトマップ用CSSフィルター */
-        [data-theme="dark"] .leaflet-tile-pane {
-            filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
-        }
-
         .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--card); border-top: 1.5px solid var(--border); display: flex; justify-content: space-around; padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); z-index: 9000; box-shadow: 0 -2px 10px rgba(0,0,0,0.03); }
         .bottom-nav a { color: var(--muted); text-decoration: none; font-size: 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-weight: 800; width: 20%; }
         .bottom-nav a.active { color: var(--primary); }
@@ -211,6 +207,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
             document.documentElement.setAttribute('data-theme', c);
             localStorage.setItem('eatmap_theme', c);
             document.querySelectorAll('.theme-btn').forEach(b => b.innerText = c==='dark'?'☀️':'🌙');
+            if(typeof onThemeChanged === 'function') onThemeChanged(c === 'dark');
         }
         
         window.addEventListener('DOMContentLoaded', ()=>{
@@ -395,7 +392,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索画面 (通常リスト ＋ 国土地理院ハイブリッド全画面マップ切替) ---
+# --- 検索画面 (通常リスト ＋ Mapbox/国土地理院ハイブリッド全画面マップ切替) ---
 RESULT_CONTENT = """
 <!-- ① 通常リストビュー -->
 <div id="view-list" class="max-w">
@@ -470,7 +467,7 @@ RESULT_CONTENT = """
         <div style="flex:1; background:var(--card); border-radius:12px; padding:8px 12px; box-shadow:0 4px 12px rgba(0,0,0,0.15); display:flex; align-items:center; gap:8px; font-size:13px; font-weight:800;">
             <button onclick="switchToList()" style="background:none; border:none; font-size:16px; cursor:pointer; padding:0; display:flex; align-items:center; color:var(--muted);"><span style="background:var(--tag); padding:4px 8px; border-radius:8px;">⬅️ リスト</span></button>
             <div style="flex:1; text-align:right; display:flex; justify-content:flex-end; gap:6px;">
-                <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleMapTile()" id="btn-maptile">🗾 地理院</button>
+                <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleMapTile()" id="btn-maptile">🗺️ 切替</button>
                 <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleOpenNow()" id="btn-open">🟢 営業中</button>
             </div>
         </div>
@@ -543,6 +540,7 @@ RESULT_CONTENT = """
 
 <script>
     let shops = {{ shops | tojson | safe }};
+    const mapboxToken = {{ mapbox_token | tojson }};
     const lat = (shops.length>0 && shops[0].lat) ? shops[0].lat : 34.8290;
     const lng = (shops.length>0 && shops[0].lng) ? shops[0].lng : 134.6900;
     
@@ -550,16 +548,30 @@ RESULT_CONTENT = """
     let previewLayer = null, fullLayer = null;
     let fullMarkers = [], routeLayer = null, circle5m = null, userMarker = null;
     let uLat = null, uLng = null, isTracking = false, watchId = null;
-    let currentTileMode = 'gsi'; // 'gsi': 国土地理院淡色, 'osm': OpenStreetMap
+    
+    // Mapboxトークンがあれば優先使用、なければ国土地理院淡色を使用
+    let currentTileMode = mapboxToken ? 'mapbox' : 'gsi';
+
+    const getMapboxUrl = (isDark) => {
+        const styleId = isDark ? 'dark-v11' : 'streets-v12';
+        return `https://api.mapbox.com/styles/v1/mapbox/${styleId}/tiles/256/{z}/{x}/{y}@2x?access_token=${mapboxToken}`;
+    };
 
     const tileConfigs = {
+        mapbox: {
+            getUrl: (isDark) => getMapboxUrl(isDark),
+            attr: '&copy; <a href="https://www.mapbox.com/" target="_blank">Mapbox</a> &copy; OpenStreetMap',
+            maxZoom: 19
+        },
         gsi: {
-            url: 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',
-            attr: '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>'
+            getUrl: () => 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',
+            attr: '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>',
+            maxZoom: 18
         },
         osm: {
-            url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            attr: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+            getUrl: () => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            attr: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
+            maxZoom: 19
         }
     };
 
@@ -577,8 +589,11 @@ RESULT_CONTENT = """
 
     // ① 通常プレビュー地図の初期化
     window.addEventListener('DOMContentLoaded', () => {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const cfg = tileConfigs[currentTileMode];
+        
         mapPreview = L.map('map-preview', {zoomControl:false, dragging:false, touchZoom:false, scrollWheelZoom:false, doubleClickZoom:false}).setView([lat, lng], 14);
-        previewLayer = L.tileLayer(tileConfigs.gsi.url, { maxZoom: 18, attribution: tileConfigs.gsi.attr }).addTo(mapPreview);
+        previewLayer = L.tileLayer(cfg.getUrl(isDark), { maxZoom: cfg.maxZoom, attribution: cfg.attr }).addTo(mapPreview);
 
         const bounds = [];
         shops.forEach((s, i) => {
@@ -602,6 +617,7 @@ RESULT_CONTENT = """
         }
         
         enableSwipeToClose('invite-modal', closeInviteModal);
+        updateTileButtonLabel();
     });
 
     // ② 全画面マップへの切り替え
@@ -626,8 +642,11 @@ RESULT_CONTENT = """
     }
 
     function initFullMap() {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const cfg = tileConfigs[currentTileMode];
+        
         mapFull = L.map('map-full', {zoomControl:false}).setView([lat, lng], 15);
-        fullLayer = L.tileLayer(tileConfigs[currentTileMode].url, { maxZoom: 18, attribution: tileConfigs[currentTileMode].attr }).addTo(mapFull);
+        fullLayer = L.tileLayer(cfg.getUrl(isDark), { maxZoom: cfg.maxZoom, attribution: cfg.attr }).addTo(mapFull);
 
         const bounds = [];
         shops.forEach((s, i) => {
@@ -656,19 +675,38 @@ RESULT_CONTENT = """
         document.querySelectorAll('.snap-card').forEach(c => observer.observe(c));
 
         if(uLat && uLng) updateFullUserMarker();
+        updateTileButtonLabel();
     }
 
-    // 地図の切り替え（国土地理院淡色 ⇔ OpenStreetMap）
+    // 地図タイルのトグル切り替え（Mapbox ⇔ 国土地理院 ⇔ OSM）
     function toggleMapTile() {
         doVibrate(25);
-        currentTileMode = (currentTileMode === 'gsi') ? 'osm' : 'gsi';
+        const modes = mapboxToken ? ['mapbox', 'gsi', 'osm'] : ['gsi', 'osm'];
+        const nextIdx = (modes.indexOf(currentTileMode) + 1) % modes.length;
+        currentTileMode = modes[nextIdx];
+        
         const cfg = tileConfigs[currentTileMode];
-        const btn = document.getElementById('btn-maptile');
-        btn.innerText = (currentTileMode === 'gsi') ? '🗾 地理院' : '🗺️ 標準OSM';
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        updateTileButtonLabel();
         
         if(fullLayer && mapFull) {
             mapFull.removeLayer(fullLayer);
-            fullLayer = L.tileLayer(cfg.url, { maxZoom: 18, attribution: cfg.attr }).addTo(mapFull);
+            fullLayer = L.tileLayer(cfg.getUrl(isDark), { maxZoom: cfg.maxZoom, attribution: cfg.attr }).addTo(mapFull);
+        }
+    }
+
+    function updateTileButtonLabel() {
+        const btn = document.getElementById('btn-maptile');
+        if(!btn) return;
+        const labelMap = { 'mapbox': '✨ Mapbox', 'gsi': '🗾 地理院', 'osm': '🗺️ OSM' };
+        btn.innerText = labelMap[currentTileMode] || '🗺️ 切替';
+    }
+
+    function onThemeChanged(isDark) {
+        if(currentTileMode === 'mapbox' && fullLayer && mapFull) {
+            mapFull.removeLayer(fullLayer);
+            const cfg = tileConfigs.mapbox;
+            fullLayer = L.tileLayer(cfg.getUrl(isDark), { maxZoom: cfg.maxZoom, attribution: cfg.attr }).addTo(mapFull);
         }
     }
 
@@ -754,7 +792,7 @@ RESULT_CONTENT = """
                 html:`<div style="position:relative; width:16px; height:16px;">
                         <div id="user-vision" style="position:absolute; top:-24px; left:-12px; width:0; height:0; border-left:20px solid transparent; border-right:20px solid transparent; border-bottom:40px solid rgba(59,130,246,0.25); transform-origin: center bottom; border-radius:40px 40px 0 0; transition: transform 0.2s;"></div>
                         <div style="background:#3b82f6; width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 0 4px rgba(59,130,246,0.3); position:absolute; z-index:2; animation: pulse 2s infinite;"></div>
-                      </div><style>@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } 70% { box-shadow: 0 0 0 15px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } }</style>`,
+                      </div><style>@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } 70% { box-shadow: 0 0 0 15px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }</style>`,
                 iconSize:[16,16], iconAnchor:[8,8]
             });
             userMarker = L.marker([uLat, uLng], {icon: curIcon, zIndexOffset:1000}).addTo(mapFull);
@@ -853,7 +891,7 @@ GUIDE_CONTENT = """
     <div style="font-size:20px; font-weight:900; margin-bottom:4px;">🍽️ EAT MAP ガイド</div>
     <div style="font-size:12px; opacity:.95; line-height:1.5;">お店探し・飲み会の幹事・毎日のご飯選びを爆速＆快適にするオールインワンアプリです！</div>
 </div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>通常リスト</b>：見やすい縦スクロールでお店を比較。</li><li><b>⛶ 地図拡大</b>：ボタンを押すと全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>🗾 地図切替</b>：国土地理院の淡色地図（見やすさ抜群）とOpenStreetMapをワンタップ切替。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>通常リスト</b>：見やすい縦スクロールでお店を比較。</li><li><b>⛶ 地図拡大</b>：ボタンを押すと全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>Mapbox ＆ 国土地理院</b>：美麗なMapbox地図と日本の精密な国土地理院地図をワンタップ切替。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
 <div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. ダブルAIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>Gemini ＋ Groq</b>：2つの無料AIを併用し、途切れることなく自然な会話を実現。</li><li><b>検索直結</b>：会話から最適な店舗検索キーワードをAIが自動抽出します。</li></ul></div>
 <div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple);">🧮 3. おでかけ・幹事便利ツール</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>⏰ 終電見張りアラーム</b>：終電時刻の30分前・15分前に通知＆振動。解除も可能。</li><li><b>⏱️ 退席タイマー ＆ 傾斜割り勘</b>：ラストオーダー管理や送金先付きの割り勘計算。</li></ul></div>
 <a href="/" class="btn-block btn-primary" style="margin-top:14px;">さっそく使ってみる！</a>
@@ -1110,7 +1148,7 @@ def search():
     title = f"{a} {k} {tag_str}".strip() or "おすすめ店舗"
     
     shops = fetch_shops(keyword=k, area=a, lat=lat_val, lng=lng_val, smoking=smoking, private_room=private_room, free_drink=free_drink, midnight=midnight, pref_fish=pref_fish, pref_meat=pref_meat, pref_spicy=pref_spicy)
-    content = render_template_string(RESULT_CONTENT, shops=shops, search_title=title)
+    content = render_template_string(RESULT_CONTENT, shops=shops, search_title=title, mapbox_token=MAPBOX_ACCESS_TOKEN)
     return render_page(content)
 
 @app.route('/favorites')
