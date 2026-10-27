@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】AI対話復旧・高速化 ＆ 全機能最適化版 app1.py
+# 【EAT MAP】OpenStreetMap切り替え＆視認性強化完全版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
 from collections import defaultdict
@@ -54,7 +54,7 @@ def apply_security_and_compress(res):
         "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:; "
         "img-src 'self' https: data: blob:; "
         "font-src 'self' https: data:; "
-        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://*.cartocdn.com;"
+        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://*.openstreetmap.org;"
     )
     if res.content_type and 'text/html' in res.content_type:
         res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -287,7 +287,7 @@ GUIDE_CONTENT = """
         💬 2. 爆速AIコンシェルジュ
     </h3>
     <ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7; color:var(--text);">
-        <li><b>雑談も相談も即答</b>：自然な会話でおすすめのお店や気分に寄り添った案内。</li>
+        <li><b>待ち時間なしの即答</b>：自然な会話でおすすめのお店や気分に寄り添った案内。</li>
         <li><b>検索直結</b>：AIの返答から「探す」を押せばそのまま地図・一覧へ直行！</li>
     </ul>
 </div>
@@ -515,7 +515,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索結果 & 見やすい地図 ---
+# --- 検索結果 & 見やすいOpenStreetMap地図（自動ズーム＆現在地青ピン付き） ---
 RESULT_CONTENT = """
 <div class="top-bar">
     <a href="/" class="btn-sm">← 戻る</a>
@@ -564,6 +564,7 @@ RESULT_CONTENT = """
     {% endfor %}
 </div>
 
+<!-- 案内状モーダル -->
 <div id="invite-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:center; align-items:center; padding:14px;">
     <div class="card" style="width:100%; max-width:440px; margin:0; background:var(--card);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -589,18 +590,43 @@ RESULT_CONTENT = """
     setTimeout(() => {
         const map = L.map('map', {zoomControl:false}).setView([lat, lng], 14);
         L.control.zoom({position:'bottomright'}).addTo(map);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(map);
 
+        // 完全無料・APIキー不要のOpenStreetMap公式タイル
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        const bounds = [];
         shops.forEach((s, i) => {
             if(s.lat && s.lng){
+                bounds.push([s.lat, s.lng]);
                 const icon = L.divIcon({
                     className:'',
-                    html:`<div style="background:var(--primary); color:#fff; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.3); font-size:11px; font-weight:900; display:flex; align-items:center; justify-content:center; width:24px; height:24px;">${i+1}</div>`,
-                    iconSize:[24,24], iconAnchor:[12,12]
+                    html:`<div style="background:var(--primary); color:#fff; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,0.3); font-size:11px; font-weight:900; display:flex; align-items:center; justify-content:center; width:26px; height:26px;">${i+1}</div>`,
+                    iconSize:[26,26], iconAnchor:[13,13]
                 });
                 L.marker([s.lat, s.lng], {icon}).addTo(map).bindPopup(`<b style="font-size:12px;">${s.name}</b><br><a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.address)}" target="_blank" style="color:var(--primary); font-size:11px; font-weight:bold;">ルート案内 ↗</a>`);
             }
         });
+
+        // 全店舗がぴったり収まるよう自動ズーム調整
+        if(bounds.length > 0){
+            map.fitBounds(bounds, {padding: [30, 30], maxZoom: 15});
+        }
+
+        // 現在地の青い光る点を描画
+        if(navigator.geolocation){
+            navigator.geolocation.getCurrentPosition(pos => {
+                const uLat = pos.coords.latitude, uLng = pos.coords.longitude;
+                const curIcon = L.divIcon({
+                    className:'',
+                    html:`<div style="background:#0284c7; width:14px; height:14px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 10px rgba(2,132,199,0.9);"></div>`,
+                    iconSize:[14,14], iconAnchor:[7,7]
+                });
+                L.marker([uLat, uLng], {icon: curIcon}).addTo(map).bindPopup("<b>📍 あなたの現在地</b>");
+            }, ()=>{}, {timeout:4000});
+        }
     }, 100);
 
     if(navigator.geolocation){
@@ -1586,7 +1612,6 @@ def api_chat():
         except Exception:
             continue
 
-    # 入力内容に合わせた柔軟なフォールバック
     if any(w in msg for w in ["眠", "つかれ", "帰る", "しんど"]):
         return jsonify({"reply": f"お疲れさまです！無理せずゆっくり休んでくださいね。温かいシメ飯や落ち着くカフェも探せますよ✨"})
     return jsonify({"reply": f"「{msg}」ですね！おすすめの美味しいお店を下のボタンからすぐ探せますよ✨"})
