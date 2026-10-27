@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】完全日本語高精細マップ(OSM-JP) ＆ ダブルAI搭載 完全統合版 app1.py
+# 【EAT MAP】新機能4種 ＆ UI/通信バグ完全修正 完全統合版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
 from collections import defaultdict
@@ -14,8 +14,8 @@ app = Flask(__name__)
 # --- APIキーの設定 ---
 HOTPEPPER_API_KEY = os.environ.get("HOTPEPPER_API_KEY", "").strip()
 GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "").strip()
+GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "").strip()
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     for k, v in os.environ.items():
         if "GEMINI" in k.upper() or "EAT" in k.upper():
@@ -71,14 +71,14 @@ DEFAULT_SHOPS = [
     {
         "name": "姫路和食 個室 旬彩庵 (サンプル)", "genre": "居酒屋・個室和食",
         "address": "兵庫県姫路市駅前町100", "budget": "3,500円〜5,000円", "min_budget": 3500,
-        "lat": 34.8290, "lng": 134.6900, "tel": "079-000-0002", "open": "17:00～23:30", "access": "姫路駅北口徒歩3分",
+        "lat": 34.8290, "lng": 134.6900, "tel": "079-000-0002", "open": "17:00～23:30 (L.O. 22:30)", "access": "姫路駅北口徒歩3分",
         "has_private": True, "smoking_info": "🚬 喫煙可", "has_free_drink": True,
         "photo": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600", "url": "https://www.hotpepper.jp/"
     },
     {
         "name": "CAFÉ DE ÉTOILE (サンプル)", "genre": "カフェ・スイーツ",
         "address": "兵庫県姫路市本町68", "budget": "1,000円〜2,000円", "min_budget": 1000,
-        "lat": 34.8340, "lng": 134.6930, "tel": "079-000-0001", "open": "10:00～19:00", "access": "地下街直結",
+        "lat": 34.8340, "lng": 134.6930, "tel": "079-000-0001", "open": "10:00～19:00 (L.O. 18:30)", "access": "地下街直結",
         "has_private": False, "smoking_info": "🚭 全席禁煙", "has_free_drink": False,
         "photo": "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=600", "url": "https://www.hotpepper.jp/"
     }
@@ -89,10 +89,13 @@ LAYOUT_HTML = """<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>">
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#ff5252">
+    <!-- 地図高速化のための事前接続 -->
+    <link rel="preconnect" href="https://cyberjapandata.gsi.go.jp" crossorigin>
+    <link rel="preconnect" href="https://tile.openstreetmap.jp" crossorigin>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
@@ -113,10 +116,9 @@ LAYOUT_HTML = """<!DOCTYPE html>
             document.body.appendChild(box);
         }
 
-        // リップル（波紋）エフェクト
         document.addEventListener('click', function(e) {
             const btn = e.target.closest('button') || e.target.closest('.btn-block');
-            if (!btn || btn.classList.contains('fav-btn')) return;
+            if (!btn || btn.classList.contains('fav-btn') || btn.classList.contains('star-rating-btn')) return;
             btn.style.position = 'relative'; btn.style.overflow = 'hidden';
             const rect = btn.getBoundingClientRect(); const size = Math.max(rect.width, rect.height);
             const x = e.clientX - rect.left - size / 2, y = e.clientY - rect.top - size / 2;
@@ -143,7 +145,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
             --input: #0f172a; --tag: #283347; --shadow: 0 2px 12px rgba(0,0,0,0.25);
         }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0 0 65px 0; min-height: 100vh; }
+        body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0 0 70px 0; min-height: 100vh; }
         .max-w { max-width: 480px; margin: 0 auto; padding: 14px; }
         .card { background: var(--card); border: 1.5px solid var(--border); border-radius: 16px; padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow); position: relative; }
         .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -152,8 +154,6 @@ LAYOUT_HTML = """<!DOCTYPE html>
         .btn-icon { background: var(--card); color: var(--text); width: 36px; height: 36px; font-size: 15px; box-shadow: var(--shadow); }
         .btn-sm { background: var(--tag); color: var(--text); padding: 8px 12px; font-size: 12px; gap: 4px; }
         .btn-block { width: 100%; min-height: 46px; font-size: 14px; gap: 6px; margin-bottom: 8px; box-shadow: var(--shadow); border: none; }
-        .btn-icon:active, .btn-sm:active { opacity: .7; }
-        .btn-block:active { opacity: .8; }
         .btn-primary { background: var(--primary); color: #fff; border:none; }
         .btn-yellow { background: var(--yellow); color: #493800; border:none; }
         .btn-green { background: var(--green); color: #fff; border:none; }
@@ -175,9 +175,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
         @keyframes ripple-run { to { transform: scale(3); opacity: 0; } }
 
         /* ナイトマップ用CSSフィルター */
-        [data-theme="dark"] .leaflet-tile-pane {
-            filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
-        }
+        [data-theme="dark"] .leaflet-tile-pane { filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7); }
 
         .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--card); border-top: 1.5px solid var(--border); display: flex; justify-content: space-around; padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); z-index: 9000; box-shadow: 0 -2px 10px rgba(0,0,0,0.03); }
         .bottom-nav a { color: var(--muted); text-decoration: none; font-size: 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-weight: 800; width: 20%; }
@@ -189,10 +187,25 @@ LAYOUT_HTML = """<!DOCTYPE html>
         
         .swipe-modal-content { transition: transform 0.2s; will-change: transform; }
         .swipe-handle { width: 40px; height: 5px; background: var(--muted); border-radius: 3px; margin: 0 auto 12px; opacity: 0.5; }
+
+        /* PWAスマートインストールバナー */
+        #pwa-install-banner { position: fixed; bottom: 68px; left: 12px; right: 12px; max-width: 456px; margin: 0 auto; background: var(--card); border: 1.5px solid var(--primary); border-radius: 14px; padding: 10px 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); z-index: 8999; display: none; align-items: center; gap: 10px; animation: slideUp .4s ease-out; }
+        @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     </style>
 </head>
 <body>
     <div id="loading-overlay"><div class="spinner"></div><div style="color:#fff; font-size:13px; font-weight:800;">処理中...</div></div>
+    
+    <!-- PWAインストール案内バナー -->
+    <div id="pwa-install-banner">
+        <div style="font-size:24px;">📲</div>
+        <div style="flex:1; font-size:11.5px; font-weight:800; line-height:1.4;">
+            <span style="color:var(--primary);">ホーム画面に追加</span>して、全画面アプリとして快適に使おう！
+        </div>
+        <button class="btn-sm btn-primary" onclick="showPwaInstructions()" style="padding:6px 10px; font-size:11px;">追加方法</button>
+        <button onclick="dismissPwaBanner()" style="background:none; border:none; color:var(--muted); font-size:16px; cursor:pointer; padding:0 4px;">✕</button>
+    </div>
+
     {{ content | safe }}
     <div class="bottom-nav">
         <a href="/" id="nav-home"><span class="icon">🔍</span><span>探す</span></a>
@@ -216,11 +229,32 @@ LAYOUT_HTML = """<!DOCTYPE html>
         window.addEventListener('DOMContentLoaded', ()=>{
             const isDark = document.documentElement.getAttribute('data-theme')==='dark';
             document.querySelectorAll('.theme-btn').forEach(b => b.innerText = isDark?'☀️':'🌙');
+            checkPwaStatus();
         });
         
         async function forceUpdateApp(){
             if('caches' in window){ const n = await caches.keys(); await Promise.all(n.map(k=>caches.delete(k))); }
             window.location.reload(true);
+        }
+
+        function checkPwaStatus() {
+            const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+            const dismissed = localStorage.getItem('eatmap_pwa_dismissed');
+            if(!isStandalone && !dismissed) {
+                setTimeout(() => { document.getElementById('pwa-install-banner').style.display = 'flex'; }, 1500);
+            }
+        }
+        function dismissPwaBanner() {
+            document.getElementById('pwa-install-banner').style.display = 'none';
+            localStorage.setItem('eatmap_pwa_dismissed', '1');
+        }
+        function showPwaInstructions() {
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            if(isIOS) {
+                showAppAlert("iPhoneでの追加手順", "画面下部の「共有ボタン（四角から上矢印）」をタップし、「ホーム画面に追加」を選択してください！📲");
+            } else {
+                showAppAlert("Androidでの追加手順", "ブラウザ右上の「︙（メニュー）」をタップし、「アプリをインストール」または「ホーム画面に追加」を選択してください！📲");
+            }
         }
 
         function enableSwipeToClose(modalId, closeFn) {
@@ -229,7 +263,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
             const content = el.querySelector('.swipe-modal-content');
             let startY = 0, curY = 0;
             el.addEventListener('touchstart', e => {
-                if(e.target.tagName.toLowerCase() === 'textarea' || e.target.tagName.toLowerCase() === 'input' || e.target.closest('#wheel-items-container')) return;
+                if(e.target.tagName.toLowerCase() === 'textarea' || e.target.tagName.toLowerCase() === 'input' || e.target.closest('#wheel-items-container') || e.target.closest('#detail-scroll-body')) return;
                 startY = e.touches[0].clientY; 
                 content.style.transition = 'none';
             }, {passive: true});
@@ -335,7 +369,7 @@ HOME_CONTENT = """
         <button type="submit" class="btn-block btn-primary" onclick="doVibrate(40)">条件でお店を探す</button>
     </form>
 </div>
-<div class="credit">Powered by <a href="http://webservice.recruit.co.jp/" target="_blank">ホットペッパー Webサービス</a></div>
+<div class="credit" style="font-size:11px; text-align:center; color:var(--muted); margin-top:8px;">Powered by <a href="http://webservice.recruit.co.jp/" target="_blank" style="color:var(--muted);">ホットペッパー Webサービス</a></div>
 </div>
 <script>
     function showLoad(){ document.getElementById('loading-overlay').style.display='flex'; }
@@ -395,7 +429,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索画面 (通常リスト ＋ OSM日本語/国土地理院ハイブリッド全画面マップ切替) ---
+# --- 検索画面 (通常リスト ＋ アプリ内詳細モーダル ＋ 高速全画面マップ) ---
 RESULT_CONTENT = """
 <!-- ① 通常リストビュー -->
 <div id="view-list" class="max-w">
@@ -419,9 +453,11 @@ RESULT_CONTENT = """
         {% for s in shops %}
         <div class="card shop-card" data-budget="{{ s.min_budget }}">
             <button class="fav-btn" style="position:absolute; top:12px; right:12px; font-size:18px; cursor:pointer; background:var(--card); border:1.5px solid var(--border); border-radius:10px; width:34px; height:34px; display:flex; align-items:center; justify-content:center;" onclick='toggleFav(this, {{ s | tojson }})'>♡</button>
-            {% if s.photo %}<img src="{{ s.photo }}" style="width:100%; height:150px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222;" loading="lazy">{% endif %}
+            {% if s.photo %}
+            <img src="{{ s.photo }}" style="width:100%; height:150px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222; cursor:pointer;" loading="lazy" onclick='openShopDetail({{ s | tojson }})'>
+            {% endif %}
             
-            <h3 class="shop-name" style="font-size:15px; font-weight:900; margin:0 0 6px 0; padding-right:40px; line-height:1.3;">
+            <h3 class="shop-name" style="font-size:15px; font-weight:900; margin:0 0 6px 0; padding-right:40px; line-height:1.3; cursor:pointer;" onclick='openShopDetail({{ s | tojson }})'>
                 <span style="background:var(--primary); color:#fff; font-size:11px; padding:2px 6px; border-radius:6px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}
             </h3>
             
@@ -439,13 +475,13 @@ RESULT_CONTENT = """
             <div style="font-size:11.5px; color:var(--muted); margin-bottom:10px; line-height:1.4;">📍 {{ s.address }}</div>
             
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
-                <button class="btn-sm btn-sub" style="justify-content:center; padding:10px 0; border:1px solid var(--blue); color:var(--blue);" onclick='switchToFullMap({{ loop.index0 }})'>🗺️ 地図・ルート</button>
-                <a href="{{ s.url }}" target="_blank" class="btn-sm btn-primary" style="justify-content:center; padding:10px 0;">予約・詳細 ↗</a>
+                <button class="btn-sm btn-sub" style="justify-content:center; padding:10px 0; font-weight:900;" onclick='openShopDetail({{ s | tojson }})'>🔍 店舗詳細</button>
+                <button class="btn-sm btn-sub" style="justify-content:center; padding:10px 0; border:1px solid var(--blue); color:var(--blue);" onclick='switchToFullMap({{ loop.index0 }})'>🗺️ ルート案内</button>
             </div>
             
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
                 <button class="btn-sm btn-sub" style="justify-content:center;" onclick='openInviteModal({{ s | tojson }})'>📅 案内状作成</button>
-                <button class="btn-sm btn-sub" style="justify-content:center;" onclick='pinReservation({{ s | tojson }})'>📌 予約メモ登録</button>
+                <button class="btn-sm btn-sub" style="justify-content:center;" onclick='pinReservation({{ s | tojson }})'>📌 予約メモ</button>
             </div>
         </div>
         {% endfor %}
@@ -470,7 +506,7 @@ RESULT_CONTENT = """
         <div style="flex:1; background:var(--card); border-radius:12px; padding:8px 12px; box-shadow:0 4px 12px rgba(0,0,0,0.15); display:flex; align-items:center; gap:8px; font-size:13px; font-weight:800;">
             <button onclick="switchToList()" style="background:none; border:none; font-size:16px; cursor:pointer; padding:0; display:flex; align-items:center; color:var(--muted);"><span style="background:var(--tag); padding:4px 8px; border-radius:8px;">⬅️ リスト</span></button>
             <div style="flex:1; text-align:right; display:flex; justify-content:flex-end; gap:6px;">
-                <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleMapTile()" id="btn-maptile">🗾 標準マップ</button>
+                <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleMapTile()" id="btn-maptile">🗺️ 淡色切替</button>
                 <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleOpenNow()" id="btn-open">🟢 営業中</button>
             </div>
         </div>
@@ -499,8 +535,8 @@ RESULT_CONTENT = """
         {% for s in shops %}
         <div class="snap-card" data-index="{{ loop.index0 }}">
             <div style="display:flex; gap:10px;">
-                {% if s.photo %}<img src="{{ s.photo }}" style="width:70px; height:70px; border-radius:10px; object-fit:cover; background:#222; flex-shrink:0;">{% endif %}
-                <div style="flex:1; overflow:hidden;">
+                {% if s.photo %}<img src="{{ s.photo }}" style="width:70px; height:70px; border-radius:10px; object-fit:cover; background:#222; flex-shrink:0; cursor:pointer;" onclick='openShopDetail({{ s | tojson }})'>{% endif %}
+                <div style="flex:1; overflow:hidden;" onclick='openShopDetail({{ s | tojson }})'>
                     <div style="font-size:14px; font-weight:900; line-height:1.2; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                         <span style="background:var(--primary); color:#fff; font-size:10px; padding:1px 5px; border-radius:4px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}
                     </div>
@@ -514,10 +550,41 @@ RESULT_CONTENT = """
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px;">
                 <button class="btn-sm btn-sub" style="justify-content:center; padding:9px 0; border:1px solid var(--blue); color:var(--blue);" onclick='drawRoute({{ s.lat }}, {{ s.lng }}, "{{ s.name }}")'>🚶 ルート案内</button>
-                <button class="btn-sm btn-sub" style="justify-content:center; padding:9px 0;" onclick='openInviteModal({{ s | tojson }})'>📅 案内状/メモ</button>
+                <button class="btn-sm btn-sub" style="justify-content:center; padding:9px 0;" onclick='openShopDetail({{ s | tojson }})'>🔍 詳細情報</button>
             </div>
         </div>
         {% endfor %}
+    </div>
+</div>
+
+<!-- ③ 新機能：店舗詳細モーダル（アプリ内完結） -->
+<div id="detail-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:flex-end; align-items:center; padding:14px; flex-direction:column;">
+    <div class="card swipe-modal-content" style="width:100%; max-width:440px; max-height:85vh; display:flex; flex-direction:column; margin:0 0 env(safe-area-inset-bottom); background:var(--card); padding:16px;">
+        <div class="swipe-handle"></div>
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">
+            <div style="font-size:16px; font-weight:900; line-height:1.3; flex:1;" id="dt-name">店舗詳細</div>
+            <button onclick="closeShopDetail()" style="background:none; border:none; font-size:18px; cursor:pointer; color:var(--text); padding-left:10px;">✕</button>
+        </div>
+        
+        <div id="detail-scroll-body" style="overflow-y:auto; flex:1; padding-right:2px;">
+            <img id="dt-photo" src="" style="width:100%; height:180px; object-fit:cover; border-radius:12px; margin-bottom:12px; background:#222; display:none;">
+            
+            <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:12px;" id="dt-badges"></div>
+            
+            <div style="font-size:12px; line-height:1.7; background:var(--tag); padding:12px; border-radius:12px; margin-bottom:12px;">
+                <div style="margin-bottom:6px;"><b>💰 予算目安:</b> <span id="dt-budget">--</span></div>
+                <div style="margin-bottom:6px;"><b>🕒 営業時間:</b> <span id="dt-open">--</span></div>
+                <div style="margin-bottom:6px;"><b>📍 所在地:</b> <span id="dt-address">--</span></div>
+                <div style="margin-bottom:6px;"><b>🚃 アクセス:</b> <span id="dt-access">--</span></div>
+                <div><b>🚬 喫煙区分:</b> <span id="dt-smoke">--</span></div>
+            </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px;">
+            <a href="#" id="dt-tel-btn" class="btn-block btn-green" style="margin:0; min-height:42px; font-size:13px;">📞 電話発信</a>
+            <button id="dt-route-btn" class="btn-block btn-primary" style="margin:0; min-height:42px; font-size:13px;">🚶 ルート案内</button>
+        </div>
+        <a href="#" id="dt-hp-link" target="_blank" class="btn-block btn-sub" style="margin-top:6px; min-height:38px; font-size:12px;">ホットペッパーで予約・クーポン ↗</a>
     </div>
 </div>
 
@@ -551,19 +618,23 @@ RESULT_CONTENT = """
     let fullMarkers = [], routeLayer = null, circle5m = null, userMarker = null;
     let uLat = null, uLng = null, isTracking = false, watchId = null;
     
-    // デフォルトをOSM日本公式の高精細日本語マップに設定
-    let currentTileMode = 'osmjp';
+    let currentTileMode = 'gsi_std';
+
+    const tileOptions = {
+        maxZoom: 18,
+        keepBuffer: 4,
+        updateWhenIdle: false,
+        edgeBufferTiles: 1
+    };
 
     const tileConfigs = {
-        osmjp: {
-            url: 'https://tile.openstreetmap.jp/{z}/{x}/{y}.png',
-            attr: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
-            maxZoom: 19
+        gsi_std: {
+            url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
+            attr: '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>'
         },
-        gsi: {
+        gsi_pale: {
             url: 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',
-            attr: '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>',
-            maxZoom: 18
+            attr: '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>'
         }
     };
 
@@ -581,9 +652,11 @@ RESULT_CONTENT = """
 
     // ① 通常プレビュー地図の初期化
     window.addEventListener('DOMContentLoaded', () => {
+        initFullMapInBackground();
+
         const cfg = tileConfigs[currentTileMode];
         mapPreview = L.map('map-preview', {zoomControl:false, dragging:false, touchZoom:false, scrollWheelZoom:false, doubleClickZoom:false}).setView([lat, lng], 15);
-        previewLayer = L.tileLayer(cfg.url, { maxZoom: cfg.maxZoom, attribution: cfg.attr }).addTo(mapPreview);
+        previewLayer = L.tileLayer(tileConfigs.gsi_pale.url, { ...tileOptions, attribution: cfg.attr }).addTo(mapPreview);
 
         const bounds = [];
         shops.forEach((s, i) => {
@@ -606,28 +679,17 @@ RESULT_CONTENT = """
         }
         
         enableSwipeToClose('invite-modal', closeInviteModal);
-        updateTileButtonLabel();
+        enableSwipeToClose('detail-modal', closeShopDetail);
     });
 
-    // ② 全画面マップへの切り替え
-    function switchToFullMap(targetIdx=0) {
-        doVibrate(30);
-        document.getElementById('view-list').style.display = 'none';
-        document.getElementById('view-fullmap').style.display = 'block';
-        if(!mapFull) { initFullMap(); } else { mapFull.invalidateSize(); }
-        setTimeout(() => { focusCard(targetIdx); }, 150);
-    }
+    function initFullMapInBackground() {
+        const fullmapEl = document.getElementById('view-fullmap');
+        fullmapEl.style.visibility = 'hidden';
+        fullmapEl.style.display = 'block';
 
-    function switchToList() {
-        doVibrate(20);
-        document.getElementById('view-fullmap').style.display = 'none';
-        document.getElementById('view-list').style.display = 'block';
-    }
-
-    function initFullMap() {
         const cfg = tileConfigs[currentTileMode];
         mapFull = L.map('map-full', {zoomControl:false}).setView([lat, lng], 15);
-        fullLayer = L.tileLayer(cfg.url, { maxZoom: cfg.maxZoom, attribution: cfg.attr }).addTo(mapFull);
+        fullLayer = L.tileLayer(cfg.url, { ...tileOptions, attribution: cfg.attr }).addTo(mapFull);
 
         const bounds = [];
         shops.forEach((s, i) => {
@@ -654,26 +716,39 @@ RESULT_CONTENT = """
         }, { root: slider, threshold: 0.6 });
         document.querySelectorAll('.snap-card').forEach(c => observer.observe(c));
 
+        setTimeout(() => {
+            fullmapEl.style.display = 'none';
+            fullmapEl.style.visibility = 'visible';
+            mapFull.invalidateSize();
+        }, 100);
+    }
+
+    function switchToFullMap(targetIdx=0) {
+        doVibrate(30);
+        document.getElementById('view-list').style.display = 'none';
+        document.getElementById('view-fullmap').style.display = 'block';
+        mapFull.invalidateSize();
         if(uLat && uLng) updateFullUserMarker();
-        updateTileButtonLabel();
+        setTimeout(() => { focusCard(targetIdx); }, 50);
+    }
+
+    function switchToList() {
+        doVibrate(20);
+        document.getElementById('view-fullmap').style.display = 'none';
+        document.getElementById('view-list').style.display = 'block';
     }
 
     function toggleMapTile() {
         doVibrate(25);
-        currentTileMode = (currentTileMode === 'osmjp') ? 'gsi' : 'osmjp';
+        currentTileMode = (currentTileMode === 'gsi_std') ? 'gsi_pale' : 'gsi_std';
         const cfg = tileConfigs[currentTileMode];
-        updateTileButtonLabel();
+        const btn = document.getElementById('btn-maptile');
+        btn.innerText = (currentTileMode === 'gsi_std') ? '🗺️ 淡色切替' : '🗺️ 標準切替';
+
         if(fullLayer && mapFull) {
             mapFull.removeLayer(fullLayer);
-            fullLayer = L.tileLayer(cfg.url, { maxZoom: cfg.maxZoom, attribution: cfg.attr }).addTo(mapFull);
+            fullLayer = L.tileLayer(cfg.url, { ...tileOptions, attribution: cfg.attr }).addTo(mapFull);
         }
-    }
-
-    function updateTileButtonLabel() {
-        const btn = document.getElementById('btn-maptile');
-        if(!btn) return;
-        const labelMap = { 'osmjp': '🗺️ 標準マップ', 'gsi': '🗾 地理院(淡色)' };
-        btn.innerText = labelMap[currentTileMode] || '🗺️ 切替';
     }
 
     function createEmojiPin(num, isHighlight, genre) {
@@ -700,6 +775,44 @@ RESULT_CONTENT = """
     function focusCard(idx) {
         const cards = document.querySelectorAll('.snap-card');
         if(cards[idx]) cards[idx].scrollIntoView({behavior: 'smooth', block: 'nearest', inline: 'center'});
+    }
+
+    // 新機能：アプリ内店舗詳細モーダルの表示制御
+    let currentDetailShop = null;
+    function openShopDetail(s) {
+        doVibrate(30);
+        currentDetailShop = s;
+        document.getElementById('dt-name').innerText = s.name;
+        document.getElementById('dt-budget').innerText = s.budget || "要確認";
+        document.getElementById('dt-open').innerText = s.open || "要確認";
+        document.getElementById('dt-address').innerText = s.address || "情報なし";
+        document.getElementById('dt-access').innerText = s.access || "駅近";
+        document.getElementById('dt-smoke').innerText = s.smoking_info || "要確認";
+        
+        const photoEl = document.getElementById('dt-photo');
+        if(s.photo) { photoEl.src = s.photo; photoEl.style.display = 'block'; } else { photoEl.style.display = 'none'; }
+
+        const badgeBox = document.getElementById('dt-badges');
+        badgeBox.innerHTML = `
+            <span class="badge badge-primary">🏷️ ${s.genre}</span>
+            <span class="badge badge-smoke">${s.smoking_info}</span>
+            ${s.has_private ? '<span class="badge badge-private">🚪 個室あり</span>' : ''}
+            ${s.has_free_drink ? '<span class="badge badge-drink">🍺 飲み放題あり</span>' : ''}
+        `;
+
+        document.getElementById('dt-tel-btn').href = `tel:${s.tel}`;
+        document.getElementById('dt-hp-link').href = s.url || '#';
+        document.getElementById('dt-route-btn').onclick = () => {
+            closeShopDetail();
+            switchToFullMap();
+            drawRoute(s.lat, s.lng, s.name);
+        };
+
+        document.getElementById('detail-modal').style.display = 'flex';
+    }
+
+    function closeShopDetail() {
+        document.getElementById('detail-modal').style.display = 'none';
     }
 
     function drawRoute(tLat, tLng, name) {
@@ -844,7 +957,7 @@ RESULT_CONTENT = """
     function sendInviteLine(){ doVibrate(30); const txt = document.getElementById('inv-preview').value; window.open(`https://line.me/R/msg/text/?${encodeURIComponent(txt)}`, '_blank'); }
     function pinReservation(s){ doVibrate(40); const t = prompt("予約時間を入力 (例: 19:30):", "19:30"); if(t === null) return; const res = { name: s.name, time: t, course: "席のみ予約", tel: s.tel, address: s.address }; localStorage.setItem('eatmap_pinned_res', JSON.stringify(res)); showAppAlert("完了", "予約メモを固定しました！"); }
     function pinReservationFromModal(){ doVibrate(40); if(!targetShop) return; const res = { name: targetShop.name, time: document.getElementById('inv-time').value, course: "席のみ予約", tel: targetShop.tel, address: targetShop.address }; localStorage.setItem('eatmap_pinned_res', JSON.stringify(res)); closeInviteModal(); showAppAlert("完了", "予約メモを固定しました！"); }
-    function toggleFav(btn, s){ doVibrate(40); let f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]'); const idx = f.findIndex(x=>x.name===s.name); if(idx>-1){ f.splice(idx,1); btn.innerHTML='♡'; btn.style.color=''; } else { s.visited=false; s.tag=""; f.push(s); btn.innerHTML='♥'; btn.style.color='var(--primary)'; } localStorage.setItem('eatmap_favs', JSON.stringify(f)); }
+    function toggleFav(btn, s){ doVibrate(40); let f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]'); const idx = f.findIndex(x=>x.name===s.name); if(idx>-1){ f.splice(idx,1); btn.innerHTML='♡'; btn.style.color=''; } else { s.visited=false; s.tag=""; s.rating=0; s.memo=""; f.push(s); btn.innerHTML='♥'; btn.style.color='var(--primary)'; } localStorage.setItem('eatmap_favs', JSON.stringify(f)); }
 </script>
 """
 
@@ -856,14 +969,14 @@ GUIDE_CONTENT = """
     <div style="font-size:20px; font-weight:900; margin-bottom:4px;">🍽️ EAT MAP ガイド</div>
     <div style="font-size:12px; opacity:.95; line-height:1.5;">お店探し・飲み会の幹事・毎日のご飯選びを爆速＆快適にするオールインワンアプリです！</div>
 </div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>通常リスト</b>：見やすい縦スクロールでお店を比較。</li><li><b>⛶ 地図拡大</b>：ボタンを押すと全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>🗾 地図切替</b>：OSM日本語公式（高精細）と国土地理院（淡色）をワンタップ切替。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. ダブルAIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>Gemini ＋ Groq</b>：2つの無料AIを併用し、途切れることなく自然な会話を実現。</li><li><b>検索直結</b>：会話から最適な店舗検索キーワードをAIが自動抽出します。</li></ul></div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple);">🧮 3. おでかけ・幹事便利ツール</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>⏰ 終電見張りアラーム</b>：終電時刻の30分前・15分前に通知＆振動。解除も可能。</li><li><b>⏱️ 退席タイマー ＆ 傾斜割り勘</b>：ラストオーダー管理や送金先付きの割り勘計算。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>アプリ内詳細</b>：外部リンクへ飛ばず、営業時間や設備をアプリ内で一発確認。</li><li><b>⛶ 地図拡大</b>：全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>完全日本語地図</b>：公的機関の国土地理院地図（標準・淡色）をワンタップ切替。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. ダブルAIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>Groq ＋ Gemini</b>：高速無料AIの併用で定型文ゼロ化。スムーズに会話が成立します。</li><li><b>検索直結</b>：会話から最適な店舗検索キーワードをAIが自動抽出します。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple);">🧮 3. おでかけ・幹事便利ツール</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>📋 グルメ記録 ＆ 星評価・メモ</b>：行ったお店に★評価と自分だけのメモを残せます。</li><li><b>⏰ 終電見張りアラーム</b>：終電時刻の30分前・15分前に通知＆振動。</li><li><b>⏱️ 退席タイマー ＆ 傾斜割り勘</b>：ラストオーダー管理や送金先付きの割り勘計算。</li></ul></div>
 <a href="/" class="btn-block btn-primary" style="margin-top:14px;">さっそく使ってみる！</a>
 </div>
 """
 
-# --- グルメ記録画面 ---
+# --- 新機能強化：グルメ記録画面 (星評価＆個別メモ対応) ---
 FAVORITES_CONTENT = """
 <div class="max-w">
 <div class="top-bar"><div class="brand">📋 グルメ記録</div><div style="display:flex; gap:6px;"><button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 ガチャ</button></div></div>
@@ -879,6 +992,7 @@ FAVORITES_CONTENT = """
 </div>
 <script>
     const titles = [{ lv:1, count:0, title:"Lv.1 ひよっこ探検家 🐣", icon:"🐣" },{ lv:2, count:2, title:"Lv.2 街角の食べ歩き隊 🚶", icon:"🍙" },{ lv:3, count:5, title:"Lv.3 こだわりグルメ通 🍴", icon:"🍝" },{ lv:4, count:10, title:"Lv.4 地域の名店ハンター 🏅", icon:"🥩" },{ lv:5, count:20, title:"Lv.5 伝説の美食王 👑", icon:"👑" }];
+    
     function renderFavs(){
         const list = document.getElementById('fav-list');
         const f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
@@ -888,19 +1002,49 @@ FAVORITES_CONTENT = """
         document.getElementById('user-title').innerText = cur.title; document.getElementById('badge-icon').innerText = cur.icon; document.getElementById('visited-count').innerText = `訪問達成: ${vCount}軒`;
         const eR = Math.min(100, Math.max(5, ((vCount - cur.count) / Math.max(1, (nxtC - cur.count))) * 100));
         document.getElementById('exp-text').innerText = `次まで あと${Math.max(0, nxtC - vCount)}軒`; document.getElementById('exp-bar').style.width = eR + '%';
+        
         if(f.length===0){ list.innerHTML = `<div class="card" style="text-align:center; color:var(--muted); font-weight:700; padding:30px 10px;">保存したお店がまだありません。</div>`; return; }
         const tags = ["😋絶品", "🔥コスパ", "🍺酒進む", "✨雰囲気"];
-        list.innerHTML = f.map((s,i)=>`
-            <div class="card" style="display:flex; gap:10px; padding:12px; align-items:center; margin-bottom:0;">
-                <div style="width:65px; height:65px; border-radius:10px; overflow:hidden; flex-shrink:0; background:var(--tag); display:flex; align-items:center; justify-content:center; font-size:24px;">${s.photo ? `<img src="${s.photo}" style="width:100%; height:100%; object-fit:cover;" loading="lazy">` : '🍽️'}</div>
-                <div style="flex:1; overflow:hidden;">
-                    <div style="display:flex; justify-content:space-between; align-items:flex-start;"><h3 style="margin:0 0 4px 0; font-size:13.5px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${s.name}</h3><button class="btn-icon" style="width:22px; height:22px; min-height:22px; font-size:11px; border-radius:6px; box-shadow:none; border:none; background:var(--tag); color:var(--muted);" onclick="delFav(${i})">✕</button></div>
-                    <div style="font-size:10px; color:var(--muted); margin-bottom:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📍 ${s.address}</div>
-                    ${s.visited ? `<div style="display:flex; gap:3px; margin-bottom:6px; overflow-x:auto;">${tags.map(t => `<span style="padding:2px 6px; font-size:9px; border-radius:6px; font-weight:800; cursor:pointer; background:${s.tag===t?'var(--yellow)':'var(--tag)'}; color:${s.tag===t?'#493800':'var(--muted)'};" onclick="setTag(${i}, '${t}')">${t}</span>`).join('')}</div>` : ''}
-                    <div style="display:flex; gap:6px;"><button class="btn-sm ${s.visited?'btn-green':'btn-sub'}" style="flex:1; padding:6px 0; font-size:10.5px; margin:0; border:none;" onclick="toggleV(${i})">${s.visited?'🏁 行った！':'🚩 行ってみたい'}</button></div>
+        
+        list.innerHTML = f.map((s,i)=>{
+            const rating = s.rating || 0;
+            const starsHtml = [1,2,3,4,5].map(star => `<span class="star-rating-btn" style="cursor:pointer; font-size:16px; color:${star <= rating ? '#f59e0b':'#cbd5e1'};" onclick="setRating(${i}, ${star})">★</span>`).join('');
+            
+            return `
+            <div class="card" style="display:flex; flex-direction:column; padding:12px; margin-bottom:0;">
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <div style="width:65px; height:65px; border-radius:10px; overflow:hidden; flex-shrink:0; background:var(--tag); display:flex; align-items:center; justify-content:center; font-size:24px;">${s.photo ? `<img src="${s.photo}" style="width:100%; height:100%; object-fit:cover;" loading="lazy">` : '🍽️'}</div>
+                    <div style="flex:1; overflow:hidden;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                            <h3 style="margin:0 0 2px 0; font-size:13.5px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${s.name}</h3>
+                            <button class="btn-icon" style="width:22px; height:22px; min-height:22px; font-size:11px; border-radius:6px; box-shadow:none; border:none; background:var(--tag); color:var(--muted);" onclick="delFav(${i})">✕</button>
+                        </div>
+                        <div style="font-size:10px; color:var(--muted); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📍 ${s.address}</div>
+                        <!-- ★ 1〜5 評価 -->
+                        <div style="display:flex; align-items:center; gap:2px; margin-bottom:4px;">
+                            ${starsHtml}
+                            <span style="font-size:10px; color:var(--muted); margin-left:4px; font-weight:800;">${rating > 0 ? rating + '.0' : '未評価'}</span>
+                        </div>
+                    </div>
                 </div>
-            </div>`).join('');
+                
+                ${s.visited ? `<div style="display:flex; gap:3px; margin:6px 0; overflow-x:auto;">${tags.map(t => `<span style="padding:2px 6px; font-size:9px; border-radius:6px; font-weight:800; cursor:pointer; background:${s.tag===t?'var(--yellow)':'var(--tag)'}; color:${s.tag===t?'#493800':'var(--muted)'};" onclick="setTag(${i}, '${t}')">${t}</span>`).join('')}</div>` : ''}
+                
+                <!-- 新機能：個別メモ欄 -->
+                <div style="margin-top:6px;">
+                    <input type="text" value="${htmlEscape(s.memo||'')}" placeholder="📝 一言メモ (例: レモンサワー最高、奥の席が静か)" maxlength="40" style="width:100%; padding:6px 10px; border:1px solid var(--border); border-radius:8px; font-size:11px; background:var(--tag); color:var(--text); outline:none; font-weight:700;" onchange="saveMemo(${i}, this.value)">
+                </div>
+
+                <div style="display:flex; gap:6px; margin-top:8px;">
+                    <button class="btn-sm ${s.visited?'btn-green':'btn-sub'}" style="flex:1; padding:6px 0; font-size:10.5px; margin:0; border:none;" onclick="toggleV(${i})">${s.visited?'🏁 行った！':'🚩 行ってみたい'}</button>
+                </div>
+            </div>`;
+        }).join('');
     }
+
+    function htmlEscape(str){ return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    function setRating(i, r){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].rating = (f[i].rating === r) ? 0 : r; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
+    function saveMemo(i, val){ let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].memo = val.trim(); localStorage.setItem('eatmap_favs', JSON.stringify(f)); }
     function toggleV(i){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].visited = !f[i].visited; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
     function setTag(i, t){ doVibrate(20); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].tag = (f[i].tag === t) ? '' : t; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
     function delFav(i){ if(confirm("リストから削除しますか？")){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f.splice(i,1); localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); } }
@@ -1000,14 +1144,51 @@ TOOLS_CONTENT = """
 </script>
 """
 
-# --- AI相談画面 ---
+# --- AI相談画面 (UIバグ完全修正 ＆ 日本語Enter誤爆ガード) ---
 CHAT_CONTENT = """
-<style>.msg { max-width:85%; padding:10px 14px; border-radius:16px; font-size:13.5px; font-weight:700; line-height:1.6; word-wrap:break-word; } .msg-ai { background:var(--tag); border-top-left-radius:4px; color:var(--text); margin-right:auto; } .msg-user { background:var(--primary); border-top-right-radius:4px; color:#fff; margin-left:auto; } .chat-box { display:flex; flex-direction:column; gap:12px; padding:14px; overflow-y:auto; height:52vh; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:10px; } .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); border:none; } .chip-bar { display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; margin-bottom:8px; -webkit-overflow-scrolling:touch; } .q-chip { background:var(--tag); border:1.5px solid var(--border); border-radius:16px; padding:6px 12px; font-size:11.5px; font-weight:800; color:var(--text); white-space:nowrap; cursor:pointer; }</style>
-<div class="max-w">
-<div class="top-bar"><div class="brand">💬 AIコンシェルジュ</div></div>
-<div class="chat-box" id="box"><div style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai">お店探しのお手伝いをします✨<br>「胃に優しいものが食べたい」「元気が出そうなお肉」など何でも相談してください！</div></div></div>
-<div class="chip-bar"><button class="q-chip" onclick="askChip('胃に優しいもの')">🍵 胃に優しいもの</button><button class="q-chip" onclick="askChip('元気になれるスタミナ料理')">🔥 元気が出るスタミナ</button><button class="q-chip" onclick="askChip('姫路駅近くで喫煙できる個室居酒屋')">🚬 喫煙可の個室居酒屋</button><button class="q-chip" onclick="askChip('深夜営業しているおすすめシメ飯')">🍜 深夜の背徳シメ飯</button></div>
-<div style="display:flex; gap:8px;"><input type="text" id="inp" maxlength="80" placeholder="相談を入力..." style="flex:1; padding:13px 14px; border:1.5px solid var(--border); border-radius:12px; font-size:14px; background:var(--input); color:var(--text); font-weight:700; outline:none;" onkeypress="if(event.key==='Enter') send()"><button class="btn-primary" style="width:60px; border-radius:12px; border:none; font-weight:800; cursor:pointer;" onclick="send()" id="s-btn">送信</button></div>
+<style>
+    .chat-container { display:flex; flex-direction:column; height:calc(100vh - 145px); max-height:800px; }
+    .msg { max-width:85%; padding:10px 14px; border-radius:16px; font-size:13.5px; font-weight:700; line-height:1.6; word-wrap:break-word; }
+    .msg-ai { background:var(--tag); border-top-left-radius:4px; color:var(--text); margin-right:auto; }
+    .msg-user { background:var(--primary); border-top-right-radius:4px; color:#fff; margin-left:auto; }
+    .chat-box { flex:1; overflow-y:auto; padding:14px; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:10px; display:flex; flex-direction:column; gap:12px; }
+    .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); border:none; }
+    
+    /* チップの圧縮バグ・スクロールバー完全修正 */
+    .chip-bar { 
+        display:flex; gap:8px; overflow-x:auto; padding:4px 2px 10px; margin-bottom:6px; 
+        -webkit-overflow-scrolling:touch; scrollbar-width:none; -ms-overflow-style:none; 
+    }
+    .chip-bar::-webkit-scrollbar { display:none !important; }
+    .q-chip { 
+        flex-shrink:0 !important; white-space:nowrap !important; background:var(--tag); 
+        border:1.5px solid var(--border); border-radius:16px; padding:7px 12px; font-size:12px; 
+        font-weight:800; color:var(--text); cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.04); 
+    }
+</style>
+<div class="max-w chat-container">
+    <div class="top-bar"><div class="brand">💬 AIコンシェルジュ</div></div>
+    
+    <div class="chat-box" id="box">
+        <div style="display:flex; gap:8px; align-items:flex-start;">
+            <div style="font-size:24px;">🤖</div>
+            <div class="msg msg-ai">お店探しのお手伝いをします✨<br>「胃に優しいものが食べたい」「元気が出そうなお肉」「姫路駅近くで喫煙できる個室」など何でも気軽に相談してください！</div>
+        </div>
+    </div>
+
+    <!-- 横スクロール可能・圧縮ゼロのチップバー -->
+    <div class="chip-bar">
+        <button class="q-chip" onclick="askChip('胃に優しいもの')">🍵 胃に優しいもの</button>
+        <button class="q-chip" onclick="askChip('元気になれるスタミナ料理')">🔥 元気になれるスタミナ料理</button>
+        <button class="q-chip" onclick="askChip('姫路駅近くで喫煙できる個室居酒屋')">🚬 喫煙可の個室居酒屋</button>
+        <button class="q-chip" onclick="askChip('深夜営業している背徳シメ飯')">🍜 深夜の背徳シメ飯</button>
+    </div>
+
+    <div style="display:flex; gap:8px;">
+        <!-- 日本語入力確定時の誤送信ガード付き入力欄 -->
+        <input type="text" id="inp" maxlength="80" placeholder="相談を入力..." style="flex:1; padding:13px 14px; border:1.5px solid var(--border); border-radius:12px; font-size:14px; background:var(--input); color:var(--text); font-weight:700; outline:none;" onkeydown="if(event.key==='Enter' && !event.isComposing) { event.preventDefault(); send(); }">
+        <button class="btn-primary" style="width:64px; border-radius:12px; border:none; font-weight:800; cursor:pointer;" onclick="send()" id="s-btn">送信</button>
+    </div>
 </div>
 <script>
     const box = document.getElementById('box'), inp = document.getElementById('inp'), btn = document.getElementById('s-btn');
@@ -1128,6 +1309,7 @@ def tools(): return render_page(TOOLS_CONTENT)
 @app.route('/chat')
 def chat(): return render_page(CHAT_CONTENT)
 
+# --- AIパイプライン高速化：Groq最優先で定型文ゼロ化 ---
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     req_json = request.get_json(silent=True) or {}
@@ -1146,32 +1328,8 @@ def api_chat():
         f"返答の最後に店舗検索に最適なキーワードを「【SEARCH:キーワード】」という形式で必ず1つ付けてください。"
     )
 
-    # --- 1. Gemini API呼び出し (第1候補) ---
-    if GEMINI_API_KEY:
-        gemini_payload = json.dumps({
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": 120, "temperature": 0.5}
-        }).encode('utf-8')
-        
-        headers = {'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY, 'User-Agent': 'Mozilla/5.0'}
-        for model_name in ["gemini-1.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(GEMINI_API_KEY)}"
-            try:
-                req = urllib.request.Request(url, data=gemini_payload, headers=headers)
-                with urllib.request.urlopen(req, timeout=5) as res:
-                    r_data = json.loads(res.read().decode('utf-8'))
-                    raw_text = r_data['candidates'][0]['content']['parts'][0]['text']
-                    kw_match = re.search(r'【SEARCH:(.*?)】', raw_text)
-                    if kw_match:
-                        search_keyword = kw_match.group(1).strip()
-                        raw_text = re.sub(r'【SEARCH:.*?】', '', raw_text)
-                    clean_reply = raw_text.replace("**", "").replace("*", "").strip()
-                    if clean_reply: break
-            except Exception:
-                continue
-
-    # --- 2. Groq API呼び出し (第2候補・完全無料高速AI) ---
-    if not clean_reply and GROQ_API_KEY:
+    # 1. Groq API (最優先・高速0.5秒応答)
+    if GROQ_API_KEY:
         groq_payload_dict = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
@@ -1181,18 +1339,16 @@ def api_chat():
             "max_tokens": 120,
             "temperature": 0.5
         }
-        
         groq_headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {GROQ_API_KEY}',
             'User-Agent': 'Mozilla/5.0'
         }
-        
         for g_model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
             try:
                 groq_payload_dict["model"] = g_model
                 req = urllib.request.Request("https://api.groq.com/openai/v1/chat/completions", data=json.dumps(groq_payload_dict).encode('utf-8'), headers=groq_headers)
-                with urllib.request.urlopen(req, timeout=5) as res:
+                with urllib.request.urlopen(req, timeout=7) as res:
                     g_res = json.loads(res.read().decode('utf-8'))
                     raw_text = g_res['choices'][0]['message']['content']
                     kw_match = re.search(r'【SEARCH:(.*?)】', raw_text)
@@ -1204,7 +1360,30 @@ def api_chat():
             except Exception:
                 continue
 
-    # --- 3. 内蔵スマート対話エンジン (第3候補・安全ネット) ---
+    # 2. Gemini API (第2候補)
+    if not clean_reply and GEMINI_API_KEY:
+        gemini_payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": 120, "temperature": 0.5}
+        }).encode('utf-8')
+        headers = {'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY, 'User-Agent': 'Mozilla/5.0'}
+        for model_name in ["gemini-1.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(GEMINI_API_KEY)}"
+            try:
+                req = urllib.request.Request(url, data=gemini_payload, headers=headers)
+                with urllib.request.urlopen(req, timeout=7) as res:
+                    r_data = json.loads(res.read().decode('utf-8'))
+                    raw_text = r_data['candidates'][0]['content']['parts'][0]['text']
+                    kw_match = re.search(r'【SEARCH:(.*?)】', raw_text)
+                    if kw_match:
+                        search_keyword = kw_match.group(1).strip()
+                        raw_text = re.sub(r'【SEARCH:.*?】', '', raw_text)
+                    clean_reply = raw_text.replace("**", "").replace("*", "").strip()
+                    if clean_reply: break
+            except Exception:
+                continue
+
+    # 3. 内蔵スマート対話エンジン (第3候補・安全ネット)
     if not clean_reply:
         m_lower = msg.lower()
         if any(w in m_lower for w in ["胃", "優し", "消化", "あっさり", "お腹", "調子悪"]):
