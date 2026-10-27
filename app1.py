@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】自然なAI対話 ＆ キーワード自動生成 完全統合版 app1.py
+# 【EAT MAP】国土地理院ハイブリッド地図 ＆ 無停止AI対話エンジン 完全統合版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
 from collections import defaultdict
@@ -12,7 +12,7 @@ socket.getaddrinfo = lambda *args, **kwargs: [r for r in _orig_gai(*args, **kwar
 app = Flask(__name__)
 
 # --- APIキーの設定 ---
-HOTPEPPER_API_KEY   = os.environ.get("HOTPEPPER_API_KEY", "").strip()
+HOTPEPPER_API_KEY = os.environ.get("HOTPEPPER_API_KEY", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     for k, v in os.environ.items():
@@ -51,7 +51,7 @@ def apply_security_and_compress(res):
         "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:; "
         "img-src 'self' https: data: blob:; "
         "font-src 'self' https: data:; "
-        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://*.openstreetmap.org https://tile.openstreetmap.org https://router.project-osrm.org;"
+        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://*.openstreetmap.org https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp https://router.project-osrm.org;"
     )
     if res.content_type and 'text/html' in res.content_type:
         res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -172,6 +172,11 @@ LAYOUT_HTML = """<!DOCTYPE html>
         [data-theme="light"] .btn-sub .ripple-anim, [data-theme="light"] .btn-icon .ripple-anim { background: rgba(0,0,0,0.1); }
         @keyframes ripple-run { to { transform: scale(3); opacity: 0; } }
 
+        /* ナイトマップ用CSSフィルター */
+        [data-theme="dark"] .leaflet-tile-pane {
+            filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
+        }
+
         .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--card); border-top: 1.5px solid var(--border); display: flex; justify-content: space-around; padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); z-index: 9000; box-shadow: 0 -2px 10px rgba(0,0,0,0.03); }
         .bottom-nav a { color: var(--muted); text-decoration: none; font-size: 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-weight: 800; width: 20%; }
         .bottom-nav a.active { color: var(--primary); }
@@ -204,7 +209,6 @@ LAYOUT_HTML = """<!DOCTYPE html>
             document.documentElement.setAttribute('data-theme', c);
             localStorage.setItem('eatmap_theme', c);
             document.querySelectorAll('.theme-btn').forEach(b => b.innerText = c==='dark'?'☀️':'🌙');
-            if(typeof setMapTheme === 'function') setMapTheme(c === 'dark');
         }
         
         window.addEventListener('DOMContentLoaded', ()=>{
@@ -389,7 +393,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索画面 (通常リスト ＋ 全画面マップ切替) ---
+# --- 検索画面 (通常リスト ＋ 国土地理院ハイブリッド全画面マップ切替) ---
 RESULT_CONTENT = """
 <!-- ① 通常リストビュー -->
 <div id="view-list" class="max-w">
@@ -403,7 +407,7 @@ RESULT_CONTENT = """
         <button class="btn-sm sort-tab" id="sort-price" style="flex:1; justify-content:center;" onclick="sortShops('price')">💰 予算が安い順</button>
     </div>
 
-    <!-- 通常マッププレビュー（右上に⛶拡大ボタン） -->
+    <!-- 通常マッププレビュー（右上に⛶拡大ボタン、切り替えボタン） -->
     <div style="position:relative; margin-bottom:12px;">
         <div id="map-preview" style="height:220px; width:100%; border-radius:14px; border:1.5px solid var(--border); box-shadow:var(--shadow);"></div>
         <button onclick="switchToFullMap()" style="position:absolute; top:10px; right:10px; z-index:1000; background:var(--card); border:1.5px solid var(--border); border-radius:10px; padding:6px 12px; font-size:12px; font-weight:900; box-shadow:0 2px 8px rgba(0,0,0,0.2); cursor:pointer; color:var(--text); display:flex; align-items:center; gap:4px;">⛶ 地図を拡大</button>
@@ -448,22 +452,23 @@ RESULT_CONTENT = """
 
 <!-- ② 全画面マップビュー（拡大時） -->
 <style>
-    .map-wrapper { position: relative; height: calc(100vh - 65px - env(safe-area-inset-bottom)); width: 100vw; display: flex; flex-direction: column; }
-    #map-full { flex: 1; width: 100%; z-index: 1; }
+    #map-full { width: 100%; height: 100%; z-index: 1; }
     .card-slider-container { position: absolute; bottom: 12px; left: 0; width: 100vw; z-index: 1000; overflow-x: auto; scroll-snap-type: x mandatory; display: flex; gap: 12px; padding: 0 12px 12px 12px; -webkit-overflow-scrolling: touch; transition: transform 0.3s; }
     .card-slider-container::-webkit-scrollbar { display: none; }
     .snap-card { scroll-snap-align: center; flex: 0 0 90%; background: var(--card); border-radius: 16px; box-shadow: 0 6px 16px rgba(0,0,0,0.2); padding: 12px; border: 1.5px solid var(--border); }
     #route-panel { position: absolute; top: 0; left: 0; width: 100%; background: var(--card); z-index: 1001; padding: 14px 14px 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); transform: translateY(-100%); transition: transform 0.3s; border-bottom-left-radius: 16px; border-bottom-right-radius: 16px; }
+    #route-panel.active { transform: translateY(0); }
 </style>
 
 <div id="view-fullmap" style="display:none; position:fixed; top:0; left:0; width:100vw; height:calc(100vh - 60px); z-index:900; background:var(--bg);">
-    <div id="map-full" style="width:100%; height:100%;"></div>
+    <div id="map-full"></div>
 
     <!-- 上部バー -->
     <div style="position:absolute; top:12px; left:12px; right:12px; z-index:1000; display:flex; gap:8px;">
         <div style="flex:1; background:var(--card); border-radius:12px; padding:8px 12px; box-shadow:0 4px 12px rgba(0,0,0,0.15); display:flex; align-items:center; gap:8px; font-size:13px; font-weight:800;">
-            <button onclick="switchToList()" style="background:none; border:none; font-size:16px; cursor:pointer; padding:0; display:flex; align-items:center; color:var(--muted);"><span style="background:var(--tag); padding:4px 8px; border-radius:8px;">⬅️ リストに戻る</span></button>
-            <div style="flex:1; text-align:right;">
+            <button onclick="switchToList()" style="background:none; border:none; font-size:16px; cursor:pointer; padding:0; display:flex; align-items:center; color:var(--muted);"><span style="background:var(--tag); padding:4px 8px; border-radius:8px;">⬅️ リスト</span></button>
+            <div style="flex:1; text-align:right; display:flex; justify-content:flex-end; gap:6px;">
+                <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleMapTile()" id="btn-maptile">🗾 地理院</button>
                 <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleOpenNow()" id="btn-open">🟢 営業中</button>
             </div>
         </div>
@@ -540,24 +545,38 @@ RESULT_CONTENT = """
     const lng = (shops.length>0 && shops[0].lng) ? shops[0].lng : 134.6900;
     
     let mapPreview = null, mapFull = null;
+    let previewLayer = null, fullLayer = null;
     let fullMarkers = [], routeLayer = null, circle5m = null, userMarker = null;
     let uLat = null, uLng = null, isTracking = false, watchId = null;
+    let currentTileMode = 'gsi'; // 'gsi': 国土地理院淡色, 'osm': OpenStreetMap
+
+    const tileConfigs = {
+        gsi: {
+            url: 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',
+            attr: '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>'
+        },
+        osm: {
+            url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            attr: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+        }
+    };
 
     function getGenreEmoji(genre) {
         if(!genre) return '🍽️';
         if(genre.includes('居酒屋') || genre.includes('バー')) return '🍺';
-        if(genre.includes('焼肉') || genre.includes('肉')) return '🍖';
+        if(genre.includes('焼肉') || genre.includes('肉') || genre.includes('ステーキ')) return '🍖';
         if(genre.includes('カフェ') || genre.includes('スイーツ')) return '☕';
-        if(genre.includes('ラーメン') || genre.includes('麺')) return '🍜';
-        if(genre.includes('海鮮') || genre.includes('魚')) return '🐟';
-        if(genre.includes('イタリアン')) return '🍕';
+        if(genre.includes('ラーメン') || genre.includes('麺') || genre.includes('そば') || genre.includes('うどん')) return '🍜';
+        if(genre.includes('海鮮') || genre.includes('魚') || genre.includes('寿司')) return '🐟';
+        if(genre.includes('イタリアン') || genre.includes('パスタ') || genre.includes('ピザ')) return '🍕';
+        if(genre.includes('和食')) return '🍣';
         return '🍽️';
     }
 
-    // ① 通常プレビュー地図の初期化（完全無料OSM）
+    // ① 通常プレビュー地図の初期化
     window.addEventListener('DOMContentLoaded', () => {
         mapPreview = L.map('map-preview', {zoomControl:false, dragging:false, touchZoom:false, scrollWheelZoom:false, doubleClickZoom:false}).setView([lat, lng], 14);
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OSM' }).addTo(mapPreview);
+        previewLayer = L.tileLayer(tileConfigs.gsi.url, { maxZoom: 18, attribution: tileConfigs.gsi.attr }).addTo(mapPreview);
 
         const bounds = [];
         shops.forEach((s, i) => {
@@ -606,7 +625,7 @@ RESULT_CONTENT = """
 
     function initFullMap() {
         mapFull = L.map('map-full', {zoomControl:false}).setView([lat, lng], 15);
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OSM' }).addTo(mapFull);
+        fullLayer = L.tileLayer(tileConfigs[currentTileMode].url, { maxZoom: 18, attribution: tileConfigs[currentTileMode].attr }).addTo(mapFull);
 
         const bounds = [];
         shops.forEach((s, i) => {
@@ -635,6 +654,20 @@ RESULT_CONTENT = """
         document.querySelectorAll('.snap-card').forEach(c => observer.observe(c));
 
         if(uLat && uLng) updateFullUserMarker();
+    }
+
+    // 地図の切り替え（国土地理院淡色 ⇔ OpenStreetMap）
+    function toggleMapTile() {
+        doVibrate(25);
+        currentTileMode = (currentTileMode === 'gsi') ? 'osm' : 'gsi';
+        const cfg = tileConfigs[currentTileMode];
+        const btn = document.getElementById('btn-maptile');
+        btn.innerText = (currentTileMode === 'gsi') ? '🗾 地理院' : '🗺️ 標準OSM';
+        
+        if(fullLayer && mapFull) {
+            mapFull.removeLayer(fullLayer);
+            fullLayer = L.tileLayer(cfg.url, { maxZoom: 18, attribution: cfg.attr }).addTo(mapFull);
+        }
     }
 
     function createEmojiPin(num, isHighlight, genre) {
@@ -699,7 +732,7 @@ RESULT_CONTENT = """
         if(routeLayer) { mapFull.removeLayer(routeLayer); routeLayer = null; }
         document.getElementById('route-panel').classList.remove('active');
         document.getElementById('card-slider').style.transform = 'translateY(0)';
-        document.getElementById('map-controls').style.bottom = '190px';
+        document.getElementById('map-controls').style.bottom = '200px';
         if(activeFullIdx > -1 && fullMarkers[activeFullIdx]) mapFull.panTo(fullMarkers[activeFullIdx].getLatLng());
     }
 
@@ -735,7 +768,6 @@ RESULT_CONTENT = """
             btn.style.background = 'var(--primary)'; btn.style.color = '#fff';
             if(!navigator.geolocation) return;
             
-            // コンパス連動
             if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission().then(p => { if(p === 'granted') window.addEventListener('deviceorientation', handleOrientation, true); }).catch(()=>{});
             } else { window.addEventListener('deviceorientationabsolute', handleOrientation, true); }
@@ -875,7 +907,7 @@ FAVORITES_CONTENT = """
 # --- 抽選画面 ---
 GAME_CONTENT = """
 <div class="max-w">
-<div class="top-bar"><div class="brand">🎯 ルーレット</div><div style="display:flex; gap:6px;"><a href="/guide" class="btn-icon" title="機能ガイド">❓</a><button class="btn-sm btn-sub" onclick="openWheelEditor()">✏️ 項目を編集</button></div></div>
+<div class="top-bar"><div class="brand">🎯 ルーレット</div><div style="display:flex; gap:6px;"><button class="btn-sm btn-sub" onclick="openWheelEditor()">✏️ 項目を編集</button></div></div>
 <div class="card" style="text-align:center; padding:18px 12px; margin-bottom:12px;">
     <div style="position:relative; width:280px; height:280px; margin:0 auto 18px;">
         <div style="position:absolute; top:-12px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:12px solid transparent; border-right:12px solid transparent; border-top:22px solid var(--primary); z-index:20; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.25));"></div>
@@ -935,7 +967,7 @@ TOOLS_CONTENT = """
     <button class="btn-block btn-primary" onclick="calcSplit()">割り勘を計算する</button>
     <div id="split-res" style="display:none; background:var(--tag); padding:12px; border-radius:12px; margin-top:10px; font-size:13px; font-weight:700;">
         <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍺 飲む人:</span><b style="color:var(--primary); font-size:16px;" id="res-drinker">0円</b></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;" id="box-nondrinker"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
         <div style="font-size:11px; color:var(--muted); text-align:right;" id="res-diff">余剰: 0円</div>
         <div class="input-group" style="margin-top:8px;"><input type="text" id="paypay-link" placeholder="送金先PayPay ID・リンク (任意)"></div>
         <div style="display:flex; gap:6px; margin-top:8px;"><button class="btn-sm" style="flex:1;" onclick="copySplitText()">📋 コピー</button><button class="btn-sm btn-green" style="flex:1;" onclick="shareSplit()">💬 LINE共有</button></div>
@@ -968,15 +1000,35 @@ CHAT_CONTENT = """
 <style>.msg { max-width:85%; padding:10px 14px; border-radius:16px; font-size:13.5px; font-weight:700; line-height:1.6; word-wrap:break-word; } .msg-ai { background:var(--tag); border-top-left-radius:4px; color:var(--text); margin-right:auto; } .msg-user { background:var(--primary); border-top-right-radius:4px; color:#fff; margin-left:auto; } .chat-box { display:flex; flex-direction:column; gap:12px; padding:14px; overflow-y:auto; height:52vh; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:10px; } .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); border:none; } .chip-bar { display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; margin-bottom:8px; -webkit-overflow-scrolling:touch; } .q-chip { background:var(--tag); border:1.5px solid var(--border); border-radius:16px; padding:6px 12px; font-size:11.5px; font-weight:800; color:var(--text); white-space:nowrap; cursor:pointer; }</style>
 <div class="max-w">
 <div class="top-bar"><div class="brand">💬 AIコンシェルジュ</div></div>
-<div class="chat-box" id="box"><div style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai">お店探しのお手伝いをします✨<br>「姫路の喫煙できる居酒屋」など聞いてください！</div></div></div>
-<div class="chip-bar"><button class="q-chip" onclick="askChip('姫路駅近くで喫煙できる個室居酒屋')">🚬 喫煙可の個室居酒屋</button><button class="q-chip" onclick="askChip('深夜営業しているおすすめラーメンやシメ')">🍜 深夜の背徳シメ飯</button></div>
+<div class="chat-box" id="box"><div style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai">お店探しのお手伝いをします✨<br>「胃に優しいものが食べたい」「深夜のラーメン」など、何でも聞いてください！</div></div></div>
+<div class="chip-bar"><button class="q-chip" onclick="askChip('胃に優しいもの')">🍵 胃に優しいもの</button><button class="q-chip" onclick="askChip('元気になれるスタミナ料理')">🔥 元気が出るスタミナ</button><button class="q-chip" onclick="askChip('姫路駅近くで喫煙できる個室居酒屋')">🚬 喫煙可の個室居酒屋</button><button class="q-chip" onclick="askChip('深夜営業しているおすすめシメ飯')">🍜 深夜の背徳シメ飯</button></div>
 <div style="display:flex; gap:8px;"><input type="text" id="inp" maxlength="80" placeholder="相談を入力..." style="flex:1; padding:13px 14px; border:1.5px solid var(--border); border-radius:12px; font-size:14px; background:var(--input); color:var(--text); font-weight:700; outline:none;" onkeypress="if(event.key==='Enter') send()"><button class="btn-primary" style="width:60px; border-radius:12px; border:none; font-weight:800; cursor:pointer;" onclick="send()" id="s-btn">送信</button></div>
 </div>
 <script>
     const box = document.getElementById('box'), inp = document.getElementById('inp'), btn = document.getElementById('s-btn');
     function askChip(txt) { inp.value = txt; send(); }
-    async function send(){ const txt = inp.value.trim(); if(!txt) return; doVibrate(30); box.innerHTML += `<div style="display:flex; justify-content:flex-end;"><div class="msg msg-user">${txt}</div></div>`; inp.value = ""; btn.disabled = true; box.scrollTop = box.scrollHeight; const wId = "w-" + Date.now(); box.innerHTML += `<div id="${wId}" style="display:flex; gap:8px; align-items:flex-start; margin-top:4px;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai" style="color:var(--muted);"><span class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;border-top-color:var(--primary);margin:0;"></span> 考え中...</div></div>`; box.scrollTop = box.scrollHeight;
-        try { const res = await fetch('/api/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:txt}) }); const d = await res.json(); document.getElementById(wId).remove(); const clean = d.reply.replace(/\\*\\*/g,'').replace(/\\*/g,'・').replace(/\\n/g,'<br>'); const sKw = encodeURIComponent(txt.replace(/[教えて|おすすめ|探して|の|近く]/g, ' ').trim() || txt); box.innerHTML += `<div style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai">${clean}<br><a href="/search?keyword=${sKw}" class="s-btn">🔍 この条件で探す ↗</a></div></div>`; } catch(e) { document.getElementById(wId).remove(); box.innerHTML += `<div style="text-align:center; color:var(--primary); font-size:12px; font-weight:800;">⚠️ 通信エラーが発生しました</div>`; } btn.disabled = false; box.scrollTop = box.scrollHeight; }
+    async function send(){
+        const txt = inp.value.trim(); if(!txt) return;
+        doVibrate(30);
+        box.innerHTML += `<div style="display:flex; justify-content:flex-end;"><div class="msg msg-user">${txt}</div></div>`;
+        inp.value = ""; btn.disabled = true; box.scrollTop = box.scrollHeight;
+        const wId = "w-" + Date.now();
+        box.innerHTML += `<div id="${wId}" style="display:flex; gap:8px; align-items:flex-start; margin-top:4px;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai" style="color:var(--muted);"><span class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;border-top-color:var(--primary);margin:0;"></span> 考え中...</div></div>`;
+        box.scrollTop = box.scrollHeight;
+        try {
+            const res = await fetch('/api/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:txt}) });
+            const d = await res.json();
+            document.getElementById(wId).remove();
+            const clean = d.reply.replace(/\\*\\*/g,'').replace(/\\*/g,'・').replace(/\\n/g,'<br>');
+            const sKw = encodeURIComponent(d.keyword || txt.replace(/[教えて|おすすめ|探して|の|近く]/g, ' ').trim() || txt);
+            box.innerHTML += `<div style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai">${clean}<br><a href="/search?keyword=${sKw}" class="s-btn">🔍 この条件で探す ↗</a></div></div>`;
+        } catch(e) {
+            document.getElementById(wId).remove();
+            box.innerHTML += `<div style="text-align:center; color:var(--primary); font-size:12px; font-weight:800;">⚠️ 通信エラーが発生しました</div>`;
+        }
+        btn.disabled = false;
+        box.scrollTop = box.scrollHeight;
+    }
 </script>
 """
 
@@ -1074,29 +1126,90 @@ def chat(): return render_page(CHAT_CONTENT)
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     req_json = request.get_json(silent=True) or {}
-    msg = html.escape(str(req_json.get('message', ''))[:80].strip())
-    if msg in AI_CACHE: return jsonify({"reply": AI_CACHE[msg]})
-    key = GEMINI_API_KEY
-    if not key: return jsonify({"reply": "APIキーが設定されていません。"})
+    raw_msg = str(req_json.get('message', ''))[:80].strip()
+    msg = html.escape(raw_msg)
     
-    prompt = f"飲食店案内役としてユーザーの言葉「{msg}」に日本語敬語で共感や案内を60文字以内で親切に即答してください。"
-    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"maxOutputTokens": 80, "temperature": 0.4}}).encode('utf-8')
-    headers = {'Content-Type': 'application/json', 'X-goog-api-key': key, 'User-Agent': 'Mozilla/5.0'}
-    for model_name in ["gemini-1.5-flash", "gemini-flash-latest"]:
-        try:
-            req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent", data=payload, headers=headers)
-            with urllib.request.urlopen(req, timeout=12) as res:
-                r = json.loads(res.read().decode('utf-8'))['candidates'][0]['content']['parts'][0]['text'].replace("**", "").replace("*", "").strip()
-                if len(AI_CACHE) > 100: AI_CACHE.clear()
-                AI_CACHE[msg] = r
-                return jsonify({"reply": r})
-        except Exception: continue
-    if any(w in msg for w in ["眠", "つかれ", "帰る", "しんど"]): return jsonify({"reply": f"お疲れさまです！無理せずゆっくり休んでくださいね。温かいシメ飯や落ち着くカフェも探せますよ✨"})
-    return jsonify({"reply": f"「{msg}」ですね！おすすめの美味しいお店を下のボタンからすぐ探せますよ✨"})
+    if msg in AI_CACHE:
+        return jsonify(AI_CACHE[msg])
+        
+    key = GEMINI_API_KEY
+    clean_reply = None
+    search_keyword = None
+
+    # --- 1. Gemini API呼び出し (AQ.キー両対応) ---
+    if key:
+        prompt = (
+            f"あなたは飲食店探しアプリ「EAT MAP」の親身な専属コンシェルジュです。"
+            f"ユーザーの言葉「{msg}」に日本語敬語で寄り添い、具体的な料理やお店の選び方を80文字以内で親切に提案してください。"
+            f"返答の最後に店舗検索に最適なキーワードを「【SEARCH:キーワード】」という形式で必ず1つ付けてください。"
+        )
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": 120, "temperature": 0.5}
+        }).encode('utf-8')
+        
+        headers = {'Content-Type': 'application/json', 'x-goog-api-key': key, 'User-Agent': 'Mozilla/5.0'}
+        models = ["gemini-1.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]
+        
+        for model_name in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(key)}"
+            try:
+                req = urllib.request.Request(url, data=payload, headers=headers)
+                with urllib.request.urlopen(req, timeout=8) as res:
+                    r_data = json.loads(res.read().decode('utf-8'))
+                    raw_text = r_data['candidates'][0]['content']['parts'][0]['text']
+                    
+                    # キーワード抽出
+                    kw_match = re.search(r'【SEARCH:(.*?)】', raw_text)
+                    if kw_match:
+                        search_keyword = kw_match.group(1).strip()
+                        raw_text = re.sub(r'【SEARCH:.*?】', '', raw_text)
+                    
+                    clean_reply = raw_text.replace("**", "").replace("*", "").strip()
+                    if clean_reply: break
+            except Exception:
+                continue
+
+    # --- 2. 内蔵スマート対話エンジン (フォールバック) ---
+    if not clean_reply:
+        m_lower = msg.lower()
+        if any(w in m_lower for w in ["胃", "優し", "消化", "あっさり", "お腹", "調子悪"]):
+            clean_reply = "お腹やお身体がお疲れ気味ですか？無理なさらないでくださいね。温かい出汁うどんや雑炊、身体に染みる和食定食はいかがでしょう🍵"
+            search_keyword = "うどん 雑炊 和食"
+        elif any(w in m_lower for w in ["元気", "スタミナ", "肉", "ガッツリ", "焼肉", "ステーキ"]):
+            clean_reply = "元気をしっかりチャージですね！香ばしい炭火焼肉や肉汁たっぷりの餃子、スタミナ満点のご飯でパワーをつけましょう🔥"
+            search_keyword = "焼肉 餃子 ステーキ"
+        elif any(w in m_lower for w in ["疲", "つかれ", "しんど", "眠", "帰る", "癒"]):
+            clean_reply = "今日もお疲れさまでした✨ 落ち着いた個室でゆっくりお酒を嗜むか、ほっと温まる定食やお鍋で一息つきませんか？🍶"
+            search_keyword = "居酒屋 個室 和食"
+        elif any(w in m_lower for w in ["デート", "おしゃれ", "バル", "ワイン", "記念", "イタリアン"]):
+            clean_reply = "素敵な時間になりますように✨ 照明が落ち着いたワインバルや、旬の素材が美味しいおしゃれなイタリアンがおすすめです🍷"
+            search_keyword = "イタリアン バル 個室"
+        elif any(w in m_lower for w in ["吸える", "喫煙", "たばこ", "タバコ"]):
+            clean_reply = "ゆったり一服できるお店をお探しですね🚬 席で喫煙可能、または喫煙ブース完備の快適な居酒屋をご案内します！"
+            search_keyword = "居酒屋 喫煙"
+        elif any(w in m_lower for w in ["二次会", "2次会", "深夜", "シメ", "終電", "もう一軒"]):
+            clean_reply = "まだまだ夜はこれからですね！サクッと飲めるバーや、背徳感たっぷりの深夜ラーメン、夜パフェはいかがですか？🍜"
+            search_keyword = "バー ラーメン 深夜"
+        elif any(w in m_lower for w in ["カフェ", "スイーツ", "休憩", "甘い", "コーヒー"]):
+            clean_reply = "ちょっと一息カフェタイムですね☕ こだわりのコーヒーや美味しいスイーツで、まったり過ごせるお店を探しましょう✨"
+            search_keyword = "カフェ スイーツ"
+        else:
+            clean_reply = f"「{msg}」ですね！今すぐ行きたくなる素敵なお店をピックアップしてご案内しますね🍽️"
+            search_keyword = re.sub(r'[教えて|おすすめ|探して|の|近く|食べたい]', ' ', msg).strip() or msg
+
+    res_payload = {"reply": clean_reply, "keyword": search_keyword or msg}
+    if len(AI_CACHE) > 100: AI_CACHE.clear()
+    AI_CACHE[msg] = res_payload
+    return jsonify(res_payload)
 
 @app.route('/manifest.json')
 def manifest():
-    return jsonify({"name": "EAT MAP", "short_name": "EAT MAP", "start_url": "/", "display": "standalone", "background_color": "#0f172a", "theme_color": "#ff5252", "icons": [{"src": "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>", "sizes": "192x192", "type": "image/svg+xml"}]})
+    return jsonify({
+        "name": "EAT MAP", "short_name": "EAT MAP", "start_url": "/", "display": "standalone",
+        "background_color": "#0f172a", "theme_color": "#ff5252",
+        "icons": [{"src": "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>", "sizes": "192x192", "type": "image/svg+xml"}]
+    })
 
 @app.route('/sw.js')
 def sw(): return Response("self.addEventListener('fetch', e => {});", mimetype="application/javascript")
