@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】シンプル × ポップ ガイド画面搭載＆超見やすい完全版 app1.py
+# 【EAT MAP】AI対話復旧・高速化 ＆ 全機能最適化版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
 from collections import defaultdict
@@ -27,8 +27,9 @@ if not GEMINI_API_KEY:
 if not GEMINI_API_KEY:
     GEMINI_API_KEY = base64.b64decode("QVEuQWI4Uk42S1EzbGtWSjctSVowSWFfNjEtdUpQaF9zT0tFUzFqNjV3WGg2bVZqc1o1bnc=").decode('utf-8')
 
-# ================= 1. 安全対策・セキュリティ機構 =================
+# ================= 1. 安全対策・キャッシュ・セキュリティ =================
 IP_LOG = defaultdict(list)
+AI_CACHE = {}
 
 @app.before_request
 def firewall():
@@ -100,13 +101,28 @@ LAYOUT_HTML = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>">
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#ff6b6b">
+    <meta name="theme-color" content="#ff5252">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         const savedTheme = localStorage.getItem('eatmap_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
         document.documentElement.setAttribute('data-theme', savedTheme);
-        function doVibrate(ms=30){ if('vibrate' in navigator) navigator.vibrate(ms); }
+        function doVibrate(ms=30){ try{ if('vibrate' in navigator) navigator.vibrate(ms); }catch(e){} }
+        
+        function showAppAlert(title, message) {
+            doVibrate([200, 100, 200]);
+            if ("Notification" in window && Notification.permission === "granted") {
+                try { new Notification(title, { body: message }); } catch(e){}
+            }
+            const box = document.createElement('div');
+            box.style.position = 'fixed'; box.style.top = '20px'; box.style.left = '50%';
+            box.style.transform = 'translateX(-50%)'; box.style.background = 'var(--primary)';
+            box.style.color = '#fff'; box.style.padding = '16px'; box.style.borderRadius = '16px';
+            box.style.boxShadow = '0 6px 20px rgba(0,0,0,0.2)'; box.style.zIndex = '99999';
+            box.style.width = '90%'; box.style.maxWidth = '400px'; box.style.textAlign = 'center';
+            box.innerHTML = `<div style="font-size:16px; font-weight:900; margin-bottom:8px;">${title}</div><div style="font-size:13px; font-weight:700;">${message}</div><button onclick="this.parentElement.remove()" style="margin-top:12px; width:100%; padding:10px; background:rgba(255,255,255,0.25); border:none; border-radius:10px; color:#fff; font-weight:900; cursor:pointer;">OK</button>`;
+            document.body.appendChild(box);
+        }
     </script>
     <style>
         :root {
@@ -114,54 +130,55 @@ LAYOUT_HTML = """<!DOCTYPE html>
             --text: #1e293b; --muted: #64748b;
             --primary: #ff5252; --primary-light: #fff1f2;
             --yellow: #f59e0b; --green: #10b981; --blue: #3b82f6; --purple: #8b5cf6;
-            --input: #ffffff; --tag: #f1f5f9; --shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+            --input: #ffffff; --tag: #f1f5f9; --shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
         }
         [data-theme="dark"] {
             --bg: #0f172a; --card: #1e293b; --border: #334155;
             --text: #f8fafc; --muted: #94a3b8;
             --primary: #ff6b6b; --primary-light: #2c2125;
             --yellow: #fbbf24; --green: #34d399; --blue: #60a5fa; --purple: #a78bfa;
-            --input: #0f172a; --tag: #283347; --shadow: 0 4px 20px rgba(0,0,0,0.35);
+            --input: #0f172a; --tag: #283347; --shadow: 0 2px 12px rgba(0,0,0,0.25);
         }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { 
             background: var(--bg); color: var(--text); 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", sans-serif;
             margin: 0; padding: 14px 14px 92px; min-height: 100vh;
+            -webkit-overflow-scrolling: touch;
         }
         .max-w { max-width: 480px; margin: 0 auto; }
         .card { 
             background: var(--card); border: 1.5px solid var(--border); 
-            border-radius: 18px; padding: 16px; margin-bottom: 12px; 
+            border-radius: 16px; padding: 14px; margin-bottom: 12px; 
             box-shadow: var(--shadow); position: relative; 
         }
         .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .brand { font-size: 21px; font-weight: 900; color: var(--primary); display: flex; align-items: center; gap: 6px; text-decoration: none; }
         .btn-icon, .btn-sm, .btn-block { 
-            cursor: pointer; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; 
+            cursor: pointer; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; 
             font-weight: 800; border: 1.5px solid var(--border); text-decoration: none; 
-            transition: transform .1s, opacity .15s; 
+            transition: opacity .15s; 
         }
-        .btn-icon { background: var(--card); color: var(--text); width: 38px; height: 38px; font-size: 16px; box-shadow: var(--shadow); }
-        .btn-sm { background: var(--tag); color: var(--text); padding: 8px 14px; font-size: 12px; gap: 4px; }
-        .btn-block { width: 100%; min-height: 48px; font-size: 14px; gap: 6px; margin-bottom: 8px; box-shadow: var(--shadow); border: none; }
-        .btn-icon:active, .btn-sm:active { transform: scale(.94); }
-        .btn-block:active { transform: scale(.98); opacity: .9; }
-        .btn-primary { background: var(--primary); color: #fff; }
-        .btn-yellow { background: var(--yellow); color: #493800; }
-        .btn-green { background: var(--green); color: #fff; }
-        .btn-purple { background: var(--purple); color: #fff; }
+        .btn-icon { background: var(--card); color: var(--text); width: 36px; height: 36px; font-size: 15px; box-shadow: var(--shadow); }
+        .btn-sm { background: var(--tag); color: var(--text); padding: 8px 12px; font-size: 12px; gap: 4px; }
+        .btn-block { width: 100%; min-height: 46px; font-size: 14px; gap: 6px; margin-bottom: 8px; box-shadow: var(--shadow); border: none; }
+        .btn-icon:active, .btn-sm:active { opacity: .7; }
+        .btn-block:active { opacity: .8; }
+        .btn-primary { background: var(--primary); color: #fff; border:none; }
+        .btn-yellow { background: var(--yellow); color: #493800; border:none; }
+        .btn-green { background: var(--green); color: #fff; border:none; }
+        .btn-purple { background: var(--purple); color: #fff; border:none; }
         .btn-sub { background: var(--tag); color: var(--text); border: 1.5px solid var(--border); }
         
         .input-group { margin-bottom: 10px; }
         .input-group input, .input-group select { 
-            width: 100%; padding: 13px 14px; border: 1.5px solid var(--border); 
-            border-radius: 12px; font-size: 14px; background: var(--input); 
+            width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); 
+            border-radius: 10px; font-size: 14px; background: var(--input); 
             color: var(--text); outline: none; font-weight: 700; transition: border-color .2s; 
         }
         .input-group input:focus, .input-group select:focus { border-color: var(--primary); }
 
-        .badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 800; padding: 4px 8px; border-radius: 8px; background: var(--tag); color: var(--text); }
+        .badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 800; padding: 3px 6px; border-radius: 6px; background: var(--tag); color: var(--text); }
         .badge-primary { background: var(--primary-light); color: var(--primary); }
         .badge-dist { background: #e0f2fe; color: #0284c7; }
         .badge-smoke { background: #fef3c7; color: #92400e; }
@@ -169,20 +186,18 @@ LAYOUT_HTML = """<!DOCTYPE html>
         .badge-drink { background: #ecfdf5; color: #065f46; }
 
         .filter-chip {
-            background: var(--tag); border: 1.5px solid var(--border); border-radius: 10px;
-            padding: 8px 10px; font-size: 12px; font-weight: 800; color: var(--text);
+            background: var(--tag); border: 1.5px solid var(--border); border-radius: 8px;
+            padding: 8px 10px; font-size: 11.5px; font-weight: 800; color: var(--text);
             cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px;
-            user-select: none; transition: all .15s;
+            user-select: none; transition: background .15s;
         }
-        .filter-chip.active {
-            background: var(--primary-light); border-color: var(--primary); color: var(--primary);
-        }
+        .filter-chip.active { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
 
         .bottom-nav { 
             position: fixed; bottom: 0; left: 0; width: 100%; 
             background: var(--card); border-top: 1.5px solid var(--border); 
-            display: flex; justify-content: space-around; padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); 
-            z-index: 1000; box-shadow: 0 -4px 16px rgba(0,0,0,0.06); 
+            display: flex; justify-content: space-around; padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); 
+            z-index: 1000; box-shadow: 0 -2px 10px rgba(0,0,0,0.03); 
         }
         .bottom-nav a { 
             color: var(--muted); text-decoration: none; font-size: 10px; 
@@ -190,23 +205,22 @@ LAYOUT_HTML = """<!DOCTYPE html>
             gap: 2px; font-weight: 800; width: 20%; 
         }
         .bottom-nav a.active { color: var(--primary); }
-        .bottom-nav span.icon { font-size: 20px; transition: transform .2s; }
-        .bottom-nav a:active span.icon { transform: scale(.85); }
+        .bottom-nav span.icon { font-size: 20px; }
 
         #loading-overlay { 
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
-            background: rgba(0,0,0,0.5); backdrop-filter: blur(3px); 
+            background: rgba(0,0,0,0.7); 
             display: none; justify-content: center; align-items: center; 
             flex-direction: column; z-index: 9999; 
         }
-        .spinner { width: 38px; height: 38px; border: 4px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
+        .spinner { width: 36px; height: 36px; border: 4px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
         @keyframes spin { 100% { transform: rotate(360deg); } }
-        .credit { text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); margin: 24px 0 10px; }
+        .credit { text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); margin: 20px 0 10px; }
         .credit a { color: var(--primary); text-decoration: none; }
     </style>
 </head>
 <body>
-    <div id="loading-overlay"><div class="spinner"></div><div style="color:#fff; font-size:14px; font-weight:800;">処理中...</div></div>
+    <div id="loading-overlay"><div class="spinner"></div><div style="color:#fff; font-size:13px; font-weight:800;">処理中...</div></div>
     <div class="max-w">
         {{ content | safe }}
     </div>
@@ -251,62 +265,62 @@ GUIDE_CONTENT = """
     <div style="font-size:13px; font-weight:800; color:var(--muted);">アプリの使い方</div>
 </div>
 
-<div class="card" style="background:linear-gradient(135deg, var(--primary), #e11d48); color:#fff; border:none; margin-bottom:14px;">
+<div class="card" style="background:linear-gradient(135deg, var(--primary), #e11d48); color:#fff; border:none; margin-bottom:12px;">
     <div style="font-size:20px; font-weight:900; margin-bottom:4px;">🍽️ EAT MAP ガイド</div>
     <div style="font-size:12px; opacity:.95; line-height:1.5;">お店探し・飲み会の幹事・毎日のご飯選びを爆速＆快適にするオールインワンアプリです！</div>
 </div>
 
 <div class="card">
-    <h3 style="font-size:15px; font-weight:900; margin:0 0 8px 0; color:var(--primary); display:flex; align-items:center; gap:6px;">
+    <h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary); display:flex; align-items:center; gap:6px;">
         🔍 1. お店を探す＆深夜シメ飯
     </h3>
-    <ul style="margin:0; padding-left:18px; font-size:12.5px; font-weight:700; line-height:1.7; color:var(--text);">
+    <ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7; color:var(--text);">
         <li><b>現在地・二次会一発検索</b>：GPS連動で近くの店舗を瞬時に地図表示。</li>
-        <li><b>こだわり条件</b>：🚬喫煙可、🚪個室、🍺飲み放題、魚介NGなどをワンタップで指定。</li>
-        <li><b>🌙 深夜の背徳シメ飯</b>：夜21時以降は限定ボタンが自動点灯！深夜ラーメンや夜パフェを即抽出。</li>
-        <li><b>📌 今夜の予約メモ</b>：予約したお店をホーム最上部に固定。電波が届かない地下でも安心！</li>
+        <li><b>こだわり条件</b>：🚬喫煙可、🚪個室、🍺飲み放題などをワンタップ指定。</li>
+        <li><b>🌙 深夜の背徳シメ飯</b>：夜21時以降は限定ボタンが点灯！シメ飯を即抽出。</li>
+        <li><b>📌 今夜の予約メモ</b>：予約情報をホーム最上部に固定。地下で電波が無くても安心！</li>
     </ul>
 </div>
 
 <div class="card">
-    <h3 style="font-size:15px; font-weight:900; margin:0 0 8px 0; color:var(--blue); display:flex; align-items:center; gap:6px;">
-        💬 2. AIコンシェルジュ
+    <h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue); display:flex; align-items:center; gap:6px;">
+        💬 2. 爆速AIコンシェルジュ
     </h3>
-    <ul style="margin:0; padding-left:18px; font-size:12.5px; font-weight:700; line-height:1.7; color:var(--text);">
-        <li><b>超高速AIアドバイス</b>：質問するだけでおすすめジャンルやお店の選び方を即答。</li>
-        <li><b>検索直結ボタン</b>：AIの返答から「この条件で探す」を押せばそのまま地図・一覧へ直行！</li>
+    <ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7; color:var(--text);">
+        <li><b>雑談も相談も即答</b>：自然な会話でおすすめのお店や気分に寄り添った案内。</li>
+        <li><b>検索直結</b>：AIの返答から「探す」を押せばそのまま地図・一覧へ直行！</li>
     </ul>
 </div>
 
 <div class="card">
-    <h3 style="font-size:15px; font-weight:900; margin:0 0 8px 0; color:var(--green); display:flex; align-items:center; gap:6px;">
+    <h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--green); display:flex; align-items:center; gap:6px;">
         📋 3. グルメ記録 ＆ 称号育成
     </h3>
-    <ul style="margin:0; padding-left:18px; font-size:12.5px; font-weight:700; line-height:1.7; color:var(--text);">
-        <li><b>訪問EXP・称号システム</b>：「行った！」を押すとレベルアップ（ひよっこ→美食王へ！）。</li>
-        <li><b>🗾 47都道府県制覇メーター</b>：日本全国の訪問状況を自動グラフ化。</li>
-        <li><b>🎲 保存店ガチャ</b>：「保存したけどどこ行く？」をランダムに即決。</li>
+    <ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7; color:var(--text);">
+        <li><b>見やすい画像リスト</b>：保存したお店がサムネイル付きで綺麗に並びます。</li>
+        <li><b>訪問EXP・称号</b>：「行った！」を押すとレベルアップ（美食王を目指そう！）。</li>
+        <li><b>🎲 保存店ガチャ</b>：「どこ行く？」をランダムに即決。</li>
     </ul>
 </div>
 
 <div class="card">
-    <h3 style="font-size:15px; font-weight:900; margin:0 0 8px 0; color:var(--purple); display:flex; align-items:center; gap:6px;">
+    <h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple); display:flex; align-items:center; gap:6px;">
         🧮 4. おでかけ・幹事便利ツール
     </h3>
-    <ul style="margin:0; padding-left:18px; font-size:12.5px; font-weight:700; line-height:1.7; color:var(--text);">
-        <li><b>⏰ 終電見張りアラーム</b>：終電時刻をセットすると30分前・15分前に通知＆振動。</li>
-        <li><b>⏱️ ダブル退席タイマー</b>：ラストオーダーとお席の終了時間を同時にカウントダウン。</li>
-        <li><b>💸 傾斜割り勘計算</b>：飲む人・飲まない人の傾斜や、100円〜1000円単位の端数丸め、PayPay/LINE共有に対応。</li>
+    <ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7; color:var(--text);">
+        <li><b>⏰ 終電見張りアラーム</b>：終電時刻の30分前・15分前に通知＆振動。解除もワンタップ！</li>
+        <li><b>⏱️ ダブル退席タイマー</b>：ラストオーダーと退席時間を同時にカウントダウン。</li>
+        <li><b>💸 傾斜割り勘計算</b>：飲む人/飲まない人の傾斜、端数丸め、LINE共有に対応。</li>
     </ul>
 </div>
 
 <div class="card">
-    <h3 style="font-size:15px; font-weight:900; margin:0 0 8px 0; color:var(--yellow); display:flex; align-items:center; gap:6px;">
-        🎯 5. 万能ルーレット
+    <h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--yellow); display:flex; align-items:center; gap:6px;">
+        🎯 5. 万能ルーレット (個別入力エディタ)
     </h3>
-    <ul style="margin:0; padding-left:18px; font-size:12.5px; font-weight:700; line-height:1.7; color:var(--text);">
-        <li><b>迷ったら回すだけ！</b>：キャンバス描画の本格ホイールで食べたいものを一発決定。</li>
-        <li><b>✏️ 自由な項目編集</b>：おごり役決めや罰ゲームなど、その場で何でも書き換え可能。</li>
+    <ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7; color:var(--text);">
+        <li><b>直感的な項目編集</b>：1行ずつテキスト入力や追加・削除が思い通りに操作可能。</li>
+        <li><b>迷ったら回すだけ</b>：おごり役決めや罰ゲームなど、その場で何でも書き換え可能。</li>
     </ul>
 </div>
 
@@ -324,7 +338,6 @@ HOME_CONTENT = """
     </div>
 </div>
 
-<!-- 📌 電波が無くても安心：今夜の予約メモ（常時ピン留め） -->
 <div id="pinned-reservation" class="card" style="display:none; background:linear-gradient(135deg, #1e293b, #0f172a); color:#fff; border:none; padding:14px; margin-bottom:12px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
         <span style="font-size:11px; font-weight:800; color:var(--yellow);">📌 今夜の予約メモ (オフラインOK)</span>
@@ -338,9 +351,9 @@ HOME_CONTENT = """
     </div>
 </div>
 
-<div id="weather-banner" style="display:none; background:var(--tag); border:1.5px solid var(--blue); padding:10px 14px; border-radius:14px; margin-bottom:12px; font-size:12px; font-weight:800; align-items:center; justify-content:space-between;">
+<div id="weather-banner" style="display:none; background:var(--tag); border:1.5px solid var(--blue); padding:10px 14px; border-radius:12px; margin-bottom:12px; font-size:12px; font-weight:800; align-items:center; justify-content:space-between;">
     <div style="display:flex; align-items:center; gap:8px;">
-        <span id="w-icon" style="font-size:22px;">☀️</span>
+        <span id="w-icon" style="font-size:20px;">☀️</span>
         <div><span id="w-txt">天気取得中...</span><div style="font-size:10px; color:var(--muted);" id="w-temp"></div></div>
     </div>
     <button class="btn-sm" style="background:var(--blue); color:#fff; border:none; display:none;" id="btn-rain" onclick="applyRain()">🌧️ 雨宿り店優先</button>
@@ -351,18 +364,17 @@ HOME_CONTENT = """
     <button class="btn-block btn-yellow" onclick="searchNiji()">🍻 二次会・深夜</button>
 </div>
 
-<!-- 🌙 深夜の背徳シメ飯専用ボタン（夜間にネオン調へ自動変化） -->
-<button class="btn-block" id="btn-midnight-shime" style="background:linear-gradient(135deg, #4f46e5, #9333ea); color:#fff; margin-bottom:12px; font-size:14px;" onclick="searchShime()">
+<button class="btn-block" id="btn-midnight-shime" style="background:linear-gradient(135deg, #4f46e5, #9333ea); color:#fff; margin-bottom:12px; font-size:13px;" onclick="searchShime()">
     🍜 深夜の背徳シメ飯を探す (ラーメン・夜パフェ・うどん)
 </button>
 
 <div class="card">
     <div style="font-size:12px; font-weight:800; color:var(--muted); margin-bottom:10px;">⭐ 人気ジャンル一発検索</div>
-    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:16px;">
-        <button type="button" class="btn-sm" style="background:#fee2e2; border-color:#fca5a5; color:#991b1b; justify-content:center;" onclick="quick('居酒屋 個室')">🍺 居酒屋</button>
-        <button type="button" class="btn-sm" style="background:#fef3c7; border-color:#fde047; color:#854d0e; justify-content:center;" onclick="quick('焼肉')">🍖 焼肉</button>
-        <button type="button" class="btn-sm" style="background:#dcfce7; border-color:#86efac; color:#166534; justify-content:center;" onclick="quick('カフェ')">☕ カフェ</button>
-        <button type="button" class="btn-sm" style="background:#e0f2fe; border-color:#7dd3fc; color:#075985; justify-content:center;" onclick="quick('ラーメン')">🍜 麺類</button>
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:16px;">
+        <button type="button" class="btn-sm" style="background:#fee2e2; border-color:#fca5a5; color:#991b1b; justify-content:center; padding:6px;" onclick="quick('居酒屋 個室')">🍺 居酒屋</button>
+        <button type="button" class="btn-sm" style="background:#fef3c7; border-color:#fde047; color:#854d0e; justify-content:center; padding:6px;" onclick="quick('焼肉')">🍖 焼肉</button>
+        <button type="button" class="btn-sm" style="background:#dcfce7; border-color:#86efac; color:#166534; justify-content:center; padding:6px;" onclick="quick('カフェ')">☕ カフェ</button>
+        <button type="button" class="btn-sm" style="background:#e0f2fe; border-color:#7dd3fc; color:#075985; justify-content:center; padding:6px;" onclick="quick('ラーメン')">🍜 麺類</button>
     </div>
 
     <form action="/search" method="GET" id="s-form" onsubmit="showLoad()">
@@ -454,17 +466,15 @@ HOME_CONTENT = """
         } else { window.location.href=`/search?keyword=${encodeURIComponent(kw)}&midnight=1`; }
     }
 
-    // 21時〜翌5時の深夜時間判定
     const curHour = new Date().getHours();
     if(curHour >= 21 || curHour < 5){
         const shimeBtn = document.getElementById('btn-midnight-shime');
         if(shimeBtn){
-            shimeBtn.style.boxShadow = "0 0 15px rgba(168, 85, 247, 0.6)";
-            shimeBtn.innerHTML = "🌙⚡【深夜限定】背徳のシメ飯を探す (ラーメン・夜パフェ・うどん)";
+            shimeBtn.style.boxShadow = "0 0 15px rgba(168, 85, 247, 0.5)";
+            shimeBtn.innerHTML = "🌙⚡【深夜限定】背徳のシメ飯を探す (ラーメン・夜パフェ)";
         }
     }
 
-    // 📌 今夜の予約メモ（ピン留め表示）
     function checkPinReservation(){
         const res = JSON.parse(localStorage.getItem('eatmap_pinned_res')||'null');
         const box = document.getElementById('pinned-reservation');
@@ -517,33 +527,33 @@ RESULT_CONTENT = """
     <button class="btn-sm sort-tab" id="sort-price" style="flex:1; justify-content:center;" onclick="sortShops('price')">💰 予算が安い順</button>
 </div>
 
-<div id="map" style="height:230px; width:100%; border-radius:16px; border:1.5px solid var(--border); margin-bottom:12px; box-shadow:var(--shadow);"></div>
+<div id="map" style="height:230px; width:100%; border-radius:14px; border:1.5px solid var(--border); margin-bottom:12px; box-shadow:var(--shadow);"></div>
 
 <div id="shops-list">
     {% for s in shops %}
     <div class="card shop-card" data-budget="{{ s.min_budget }}" data-lat="{{ s.lat }}" data-lng="{{ s.lng }}">
-        <button class="fav-btn" style="position:absolute; top:12px; right:12px; font-size:18px; cursor:pointer; background:var(--card); border:1.5px solid var(--border); border-radius:10px; width:36px; height:36px; display:flex; align-items:center; justify-content:center;" onclick='toggleFav(this, {{ s | tojson }})'>♡</button>
-        {% if s.photo %}<img src="{{ s.photo }}" style="width:100%; height:160px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222;" loading="lazy">{% endif %}
+        <button class="fav-btn" style="position:absolute; top:12px; right:12px; font-size:18px; cursor:pointer; background:var(--card); border:1.5px solid var(--border); border-radius:10px; width:34px; height:34px; display:flex; align-items:center; justify-content:center;" onclick='toggleFav(this, {{ s | tojson }})'>♡</button>
+        {% if s.photo %}<img src="{{ s.photo }}" style="width:100%; height:150px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222;" loading="lazy">{% endif %}
         
-        <h3 class="shop-name" style="font-size:16px; font-weight:900; margin:0 0 6px 0; padding-right:42px;"><span style="background:var(--primary); color:#fff; font-size:12px; padding:2px 7px; border-radius:8px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}</h3>
+        <h3 class="shop-name" style="font-size:15px; font-weight:900; margin:0 0 6px 0; padding-right:40px; line-height:1.3;"><span style="background:var(--primary); color:#fff; font-size:11px; padding:2px 6px; border-radius:6px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}</h3>
         
-        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:6px;">
             <span class="badge badge-primary">🏷️ {{ s.genre }}</span>
             <span class="badge">💰 {{ s.budget }}</span>
             <span class="badge badge-dist" id="dist-{{ loop.index0 }}" style="display:none;">📍 計算中...</span>
         </div>
 
-        <div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px;">
-            {% if s.has_private %}<span class="badge badge-private">🚪 個室あり</span>{% endif %}
+        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px;">
+            {% if s.has_private %}<span class="badge badge-private">🚪 個室</span>{% endif %}
             <span class="badge badge-smoke">{{ s.smoking_info }}</span>
             {% if s.has_free_drink %}<span class="badge badge-drink">🍺 飲み放題</span>{% endif %}
         </div>
 
-        <div style="font-size:12px; color:var(--muted); margin-bottom:12px; line-height:1.4;">📍 {{ s.address }}</div>
+        <div style="font-size:11.5px; color:var(--muted); margin-bottom:10px; line-height:1.4;">📍 {{ s.address }}</div>
         
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
-            <a href="tel:{{ s.tel }}" class="btn-sm" style="justify-content:center; background:#ecfdf5; color:#065f46;">📞 電話する</a>
-            <a href="{{ s.url }}" target="_blank" class="btn-sm btn-primary" style="justify-content:center;">予約・詳細 ↗</a>
+            <a href="tel:{{ s.tel }}" class="btn-sm" style="justify-content:center; background:#ecfdf5; color:#065f46; padding:10px 0;">📞 電話する</a>
+            <a href="{{ s.url }}" target="_blank" class="btn-sm btn-primary" style="justify-content:center; padding:10px 0;">予約・詳細 ↗</a>
         </div>
         
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
@@ -554,12 +564,11 @@ RESULT_CONTENT = """
     {% endfor %}
 </div>
 
-<!-- 案内状モーダル -->
-<div id="invite-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.6); backdrop-filter:blur(3px); z-index:99999; justify-content:center; align-items:center; padding:14px;">
+<div id="invite-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:center; align-items:center; padding:14px;">
     <div class="card" style="width:100%; max-width:440px; margin:0; background:var(--card);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <span style="font-size:14px; font-weight:900;">📅 LINE幹事案内状を作成</span>
-            <button onclick="closeInviteModal()" style="background:none; border:none; font-size:18px; cursor:pointer;">✕</button>
+            <button onclick="closeInviteModal()" style="background:none; border:none; font-size:18px; cursor:pointer; color:var(--text);">✕</button>
         </div>
         <div class="input-group"><input type="text" id="inv-time" placeholder="日時 (例: 10月28日(水) 19:30〜)"></div>
         <div class="input-group"><input type="text" id="inv-fee" placeholder="会費 (例: 4,000円 / 割り勘)"></div>
@@ -576,20 +585,23 @@ RESULT_CONTENT = """
     let shops = {{ shops | tojson | safe }};
     const lat = (shops.length>0 && shops[0].lat) ? shops[0].lat : 34.8290;
     const lng = (shops.length>0 && shops[0].lng) ? shops[0].lng : 134.6900;
-    const map = L.map('map', {zoomControl:false}).setView([lat, lng], 14);
-    L.control.zoom({position:'bottomright'}).addTo(map);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(map);
+    
+    setTimeout(() => {
+        const map = L.map('map', {zoomControl:false}).setView([lat, lng], 14);
+        L.control.zoom({position:'bottomright'}).addTo(map);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(map);
 
-    shops.forEach((s, i) => {
-        if(s.lat && s.lng){
-            const icon = L.divIcon({
-                className:'',
-                html:`<div style="background:var(--primary); color:#fff; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,0.3); font-size:11px; font-weight:900; display:flex; align-items:center; justify-content:center; width:26px; height:26px;">${i+1}</div>`,
-                iconSize:[26,26], iconAnchor:[13,13]
-            });
-            L.marker([s.lat, s.lng], {icon}).addTo(map).bindPopup(`<b style="font-size:12px;">${s.name}</b><br><a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.address)}" target="_blank" style="color:var(--primary); font-size:11px; font-weight:bold;">ルート案内 ↗</a>`);
-        }
-    });
+        shops.forEach((s, i) => {
+            if(s.lat && s.lng){
+                const icon = L.divIcon({
+                    className:'',
+                    html:`<div style="background:var(--primary); color:#fff; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.3); font-size:11px; font-weight:900; display:flex; align-items:center; justify-content:center; width:24px; height:24px;">${i+1}</div>`,
+                    iconSize:[24,24], iconAnchor:[12,12]
+                });
+                L.marker([s.lat, s.lng], {icon}).addTo(map).bindPopup(`<b style="font-size:12px;">${s.name}</b><br><a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.address)}" target="_blank" style="color:var(--primary); font-size:11px; font-weight:bold;">ルート案内 ↗</a>`);
+            }
+        });
+    }, 100);
 
     if(navigator.geolocation){
         navigator.geolocation.getCurrentPosition(pos => {
@@ -660,7 +672,7 @@ RESULT_CONTENT = """
     function copyInviteText(){
         doVibrate(30);
         const txt = document.getElementById('inv-preview').value;
-        if(navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>alert("案内文をコピーしました！"));
+        if(navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>showAppAlert("完了","案内文をコピーしました！"));
         else prompt("コピーしてください:", txt);
     }
     function sendInviteLine(){
@@ -677,7 +689,7 @@ RESULT_CONTENT = """
         const c = prompt("コース名や席のメモ (例: 飲み放題付き4000円コース):", "席のみ予約");
         const res = { name: s.name, time: t, course: c, tel: s.tel, address: s.address };
         localStorage.setItem('eatmap_pinned_res', JSON.stringify(res));
-        alert("📌 ホーム最上部に今夜の予約メモをピン留めしました！\\n（地下でも電波なしで確認できます）");
+        showAppAlert("ピン留め完了", "ホーム最上部に今夜の予約メモをピン留めしました！\\n（地下でも電波なしで確認できます）");
     }
 
     function toggleFav(btn, s){
@@ -698,13 +710,13 @@ RESULT_CONTENT = """
 </script>
 """
 
-# --- 記録画面 (レベル＆称号 ＋ 保存店ガチャ ＋ リアクションバッジ) ---
+# --- 記録画面 (UI刷新・横長リスト型) ---
 FAVORITES_CONTENT = """
 <div class="top-bar">
     <div class="brand">📋 グルメ記録</div>
     <div style="display:flex; gap:6px;">
         <a href="/guide" class="btn-icon" title="機能ガイド">❓</a>
-        <button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 保存店ガチャ</button>
+        <button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 ガチャ</button>
     </div>
 </div>
 
@@ -712,28 +724,20 @@ FAVORITES_CONTENT = """
     <div style="display:flex; justify-content:space-between; align-items:center;">
         <div>
             <div style="font-size:11px; font-weight:800; opacity:.9;">🏆 現在のグルメ称号</div>
-            <div style="font-size:20px; font-weight:900;" id="user-title">Lv.1 ひよっこ探検家 🐣</div>
+            <div style="font-size:18px; font-weight:900;" id="user-title">Lv.1 ひよっこ探検家 🐣</div>
         </div>
-        <div style="font-size:26px;" id="badge-icon">🌟</div>
+        <div style="font-size:24px;" id="badge-icon">🌟</div>
     </div>
     <div style="font-size:11px; margin-top:8px; display:flex; justify-content:space-between; font-weight:800;">
         <span id="visited-count">訪問数: 0軒</span>
         <span id="exp-text">EXP: 0/100</span>
     </div>
-    <div style="background:rgba(255,255,255,0.25); height:8px; border-radius:4px; overflow:hidden; margin-top:4px;">
+    <div style="background:rgba(255,255,255,0.25); height:6px; border-radius:3px; overflow:hidden; margin-top:4px;">
         <div id="exp-bar" style="background:var(--yellow); height:100%; width:0%; transition:width .4s;"></div>
     </div>
 </div>
 
-<div class="card" style="background:linear-gradient(135deg, var(--green), #059669); color:#fff; border:none; margin-bottom:14px;">
-    <div style="font-size:11px; font-weight:800; opacity:.95;">🗾 47都道府県 全国制覇度</div>
-    <div style="font-size:18px; font-weight:900; margin:2px 0;" id="pref-status">0 / 47 都道府県 (0%)</div>
-    <div style="background:rgba(255,255,255,0.3); height:6px; border-radius:3px; overflow:hidden;">
-        <div id="pref-bar" style="background:var(--yellow); height:100%; width:0%; transition:width .4s;"></div>
-    </div>
-</div>
-
-<div id="fav-list"></div>
+<div id="fav-list" style="display:flex; flex-direction:column; gap:10px;"></div>
 
 <script>
     const titles = [
@@ -767,49 +771,47 @@ FAVORITES_CONTENT = """
         document.getElementById('exp-text').innerText = `次レベルまで あと${Math.max(0, nextCount - vCount)}軒`;
         document.getElementById('exp-bar').style.width = expRate + '%';
 
-        const visitedPrefs = new Set();
-        visitedShops.forEach(s => {
-            const m = (s.address||'').match(/(東京都|北海道|(?:京都|大阪)府|.{2,3}県)/);
-            if(m) visitedPrefs.add(m[1]);
-        });
-        const prefRate = ((visitedPrefs.size / 47) * 100).toFixed(1);
-        document.getElementById('pref-status').innerText = `${visitedPrefs.size} / 47 都道府県 (${prefRate}%)`;
-        document.getElementById('pref-bar').style.width = Math.min(100, Math.max(3, (visitedPrefs.size/47)*100)) + '%';
-
         if(f.length===0){ 
             list.innerHTML = `<div class="card" style="text-align:center; color:var(--muted); font-weight:700; padding:30px 10px;">保存したお店がまだありません。<br>検索画面から「♡」を押して追加してみてね！</div>`; 
             return; 
         }
 
-        const tags = ["😋 絶品", "🔥 コスパ最強", "🍺 酒が進む", "✨ 雰囲気最高"];
+        const tags = ["😋絶品", "🔥コスパ", "🍺酒進む", "✨雰囲気"];
 
         list.innerHTML = f.map((s,i)=>`
-            <div class="card">
-                <button class="btn-icon" style="position:absolute; top:12px; right:12px; width:30px; height:30px; border-radius:8px;" onclick="delFav(${i})">✕</button>
-                <h3 style="margin:0 0 4px 0; font-size:15px; padding-right:32px;">${s.name}</h3>
-                <div style="font-size:11px; color:var(--muted); margin-bottom:8px;">📍 ${s.address}</div>
-                
-                ${s.visited ? `
-                <div style="display:flex; gap:4px; margin-bottom:10px; overflow-x:auto;">
-                    ${tags.map(t => `
-                        <button class="btn-sm" style="padding:4px 8px; font-size:10px; ${s.tag===t?'background:var(--yellow); color:#493800; border-color:var(--yellow);':''}" onclick="setTag(${i}, '${t}')">${t}</button>
-                    `).join('')}
-                </div>` : ''}
+            <div class="card" style="display:flex; gap:10px; padding:12px; align-items:center; margin-bottom:0;">
+                <div style="width:65px; height:65px; border-radius:10px; overflow:hidden; flex-shrink:0; background:var(--tag); display:flex; align-items:center; justify-content:center; font-size:24px;">
+                    ${s.photo ? `<img src="${s.photo}" style="width:100%; height:100%; object-fit:cover;" loading="lazy">` : '🍽️'}
+                </div>
+                <div style="flex:1; overflow:hidden;">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                        <h3 style="margin:0 0 4px 0; font-size:13.5px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.2;">${s.name}</h3>
+                        <button class="btn-icon" style="width:22px; height:22px; min-height:22px; font-size:11px; border-radius:6px; box-shadow:none; border:none; background:var(--tag); color:var(--muted); margin-left:6px;" onclick="delFav(${i})">✕</button>
+                    </div>
+                    <div style="font-size:10px; color:var(--muted); margin-bottom:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📍 ${s.address}</div>
+                    
+                    ${s.visited ? `
+                    <div style="display:flex; gap:3px; margin-bottom:6px; overflow-x:auto;">
+                        ${tags.map(t => `
+                            <span style="padding:2px 6px; font-size:9px; border-radius:6px; font-weight:800; cursor:pointer; background:${s.tag===t?'var(--yellow)':'var(--tag)'}; color:${s.tag===t?'#493800':'var(--muted)'};" onclick="setTag(${i}, '${t}')">${t}</span>
+                        `).join('')}
+                    </div>` : ''}
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-                    <button class="btn-block ${s.visited?'btn-green':'btn-sub'}" style="min-height:36px; font-size:12px; margin:0;" onclick="toggleV(${i})">
-                        ${s.visited?'🏁 行った！ (+EXP)':'🚩 行ってみたい'}
-                    </button>
-                    <a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.address)}" target="_blank" class="btn-block btn-sub" style="min-height:36px; font-size:12px; margin:0;">
-                        🗺️ ルート案内
-                    </a>
+                    <div style="display:flex; gap:6px;">
+                        <button class="btn-sm ${s.visited?'btn-green':'btn-sub'}" style="flex:1; padding:6px 0; font-size:10.5px; margin:0; border:none;" onclick="toggleV(${i})">
+                            ${s.visited?'🏁 行った！':'🚩 行ってみたい'}
+                        </button>
+                        <a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.address)}" target="_blank" class="btn-sm btn-primary" style="padding:6px 10px; font-size:11px; margin:0;">
+                            🗺️
+                        </a>
+                    </div>
                 </div>
             </div>
         `).join('');
     }
 
     function toggleV(i){ 
-        doVibrate(40); 
+        doVibrate(30); 
         let f = JSON.parse(localStorage.getItem('eatmap_favs')); 
         f[i].visited = !f[i].visited; 
         localStorage.setItem('eatmap_favs', JSON.stringify(f)); 
@@ -820,13 +822,13 @@ FAVORITES_CONTENT = """
         doVibrate(20);
         let f = JSON.parse(localStorage.getItem('eatmap_favs'));
         f[i].tag = (f[i].tag === t) ? '' : t;
-        localStorage.setItem('eatmap_favs', JSON.stringify(f));
-        renderFavs();
+        localStorage.setItem('eatmap_favs', JSON.stringify(f)); 
+        renderFavs(); 
     }
 
     function delFav(i){ 
         if(confirm("リストから削除しますか？")){ 
-            doVibrate(40); 
+            doVibrate(30); 
             let f = JSON.parse(localStorage.getItem('eatmap_favs')); 
             f.splice(i,1); 
             localStorage.setItem('eatmap_favs', JSON.stringify(f)); 
@@ -836,23 +838,23 @@ FAVORITES_CONTENT = """
 
     function pickRandomFav(){
         const f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
-        if(f.length === 0) return alert("保存したお店がありません！先にお店をお気に入り登録してね。");
+        if(f.length === 0) return showAppAlert("ご案内", "保存したお店がありません！先にお店をお気に入り登録してね。");
         doVibrate([50, 50, 100]);
         const picked = f[Math.floor(Math.random() * f.length)];
-        alert(`🎲 本日のオススメ再訪店舗！\\n\\n【${picked.name}】\\nジャンル: ${picked.genre}\\n住所: ${picked.address}`);
+        showAppAlert("🎲 今日のオススメ！", `【${picked.name}】\\nジャンル: ${picked.genre}\\n住所: ${picked.address}`);
     }
 
     window.addEventListener('DOMContentLoaded', renderFavs);
 </script>
 """
 
-# --- 抽選画面 (単一・万能円形ルーレット盤) ---
+# --- 抽選画面 (単一万能ルーレット ＆ GPU最適化) ---
 GAME_CONTENT = """
 <div class="top-bar">
     <div class="brand">🎯 ルーレット</div>
     <div style="display:flex; gap:6px;">
         <a href="/guide" class="btn-icon" title="機能ガイド">❓</a>
-        <button class="btn-sm" onclick="editItems()">✏️ 項目を編集</button>
+        <button class="btn-sm btn-sub" onclick="openWheelEditor()">✏️ 項目を編集</button>
     </div>
 </div>
 
@@ -862,7 +864,7 @@ GAME_CONTENT = """
     <div style="position:relative; width:280px; height:280px; margin:0 auto 18px;">
         <div style="position:absolute; top:-12px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:12px solid transparent; border-right:12px solid transparent; border-top:22px solid var(--primary); z-index:20; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.25));"></div>
         <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); width:44px; height:44px; background:var(--card); border:3px solid var(--primary); border-radius:50%; z-index:15; display:flex; align-items:center; justify-content:center; font-size:18px; box-shadow:0 2px 8px rgba(0,0,0,0.15);">🍽️</div>
-        <canvas id="wheel-canvas" width="280" height="280" style="border-radius:50%; box-shadow:var(--shadow); transition:transform 4.5s cubic-bezier(0.15, 0.9, 0.2, 1);"></canvas>
+        <canvas id="wheel-canvas" width="280" height="280" style="border-radius:50%; box-shadow:var(--shadow); transition:transform 4.5s cubic-bezier(0.15, 0.9, 0.2, 1); will-change:transform;"></canvas>
     </div>
 
     <button class="btn-block btn-primary" id="spin-btn" style="font-size:16px; min-height:50px;" onclick="spinWheel()">🎯 ルーレットを回す！</button>
@@ -872,6 +874,26 @@ GAME_CONTENT = """
     <div style="font-size:12px; font-weight:800; color:var(--muted);">当選結果</div>
     <div style="font-size:26px; font-weight:900; color:var(--primary); margin:8px 0;" id="res-val">--</div>
     <a href="#" id="res-search-btn" class="btn-block btn-green" style="display:none; margin:8px auto 0;">🔍 このジャンルでお店を探す ↗</a>
+</div>
+
+<div id="wheel-edit-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:center; align-items:center; padding:14px;">
+    <div class="card" style="width:100%; max-width:440px; max-height:85vh; display:flex; flex-direction:column; margin:0; background:var(--card); padding:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <span style="font-size:15px; font-weight:900;">✏️ ルーレット項目の編集</span>
+            <button onclick="closeWheelEditor()" style="background:none; border:none; font-size:18px; cursor:pointer; color:var(--text);">✕</button>
+        </div>
+        
+        <div style="font-size:11px; color:var(--muted); margin-bottom:10px;">各行に項目を入力してください（絵文字もOK）</div>
+        
+        <div id="wheel-items-container" style="overflow-y:auto; flex:1; margin-bottom:12px; padding-right:4px;"></div>
+
+        <button class="btn-block btn-sub" style="min-height:40px; font-size:13px; margin-bottom:10px;" onclick="addWheelRow()">＋ 項目を1つ追加</button>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+            <button class="btn-block btn-sub" style="min-height:42px; font-size:13px; margin:0;" onclick="resetWheelPreset()">初期値に戻す</button>
+            <button class="btn-block btn-primary" style="min-height:42px; font-size:13px; margin:0;" onclick="saveWheelEditor()">保存する</button>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -944,18 +966,68 @@ GAME_CONTENT = """
         }, 4500);
     }
 
-    function editItems(){
-        const str = prompt("ルーレットの項目をカンマ(,)区切りで入力してください:", wheelItems.join(', '));
-        if(str){
-            const arr = str.split(',').map(s=>s.trim()).filter(s=>s);
-            if(arr.length >= 2){
-                wheelItems = arr;
-                localStorage.setItem('eat_custom_wheel', JSON.stringify(arr));
-                drawCanvas();
-                alert("項目を保存しました！");
-            } else {
-                alert("2項目以上入力してください");
-            }
+    function openWheelEditor(){
+        doVibrate(30);
+        renderWheelEditorRows();
+        document.getElementById('wheel-edit-modal').style.display = 'flex';
+    }
+
+    function closeWheelEditor(){
+        document.getElementById('wheel-edit-modal').style.display = 'none';
+    }
+
+    function renderWheelEditorRows(){
+        const container = document.getElementById('wheel-items-container');
+        container.innerHTML = wheelItems.map((item, idx) => `
+            <div style="display:flex; gap:6px; margin-bottom:8px; align-items:center;">
+                <span style="font-size:12px; font-weight:800; color:var(--muted); width:20px; text-align:center;">${idx+1}</span>
+                <input type="text" class="wheel-row-input" value="${item}" maxlength="20" style="flex:1; padding:10px 12px; border:1.5px solid var(--border); border-radius:10px; font-size:13px; font-weight:700; background:var(--input); color:var(--text); outline:none;">
+                <button type="button" class="btn-icon" style="width:36px; height:36px; border-radius:10px; color:var(--primary);" onclick="removeWheelRow(${idx})">✕</button>
+            </div>
+        `).join('');
+    }
+
+    function addWheelRow(){
+        doVibrate(20);
+        collectCurrentInputs();
+        wheelItems.push("新しい項目 ✨");
+        renderWheelEditorRows();
+        const container = document.getElementById('wheel-items-container');
+        container.scrollTop = container.scrollHeight;
+    }
+
+    function removeWheelRow(idx){
+        doVibrate(30);
+        collectCurrentInputs();
+        if(wheelItems.length <= 2) return showAppAlert("エラー", "項目は最低2つ必要です");
+        wheelItems.splice(idx, 1);
+        renderWheelEditorRows();
+    }
+
+    function collectCurrentInputs(){
+        const inputs = document.querySelectorAll('.wheel-row-input');
+        const list = [];
+        inputs.forEach(inp => {
+            const v = inp.value.trim();
+            if(v) list.push(v);
+        });
+        if(list.length > 0) wheelItems = list;
+    }
+
+    function saveWheelEditor(){
+        doVibrate(40);
+        collectCurrentInputs();
+        if(wheelItems.length < 2) return showAppAlert("エラー", "2つ以上の項目を入力してください");
+        localStorage.setItem('eat_custom_wheel', JSON.stringify(wheelItems));
+        drawCanvas();
+        closeWheelEditor();
+        showAppAlert("完了", "ルーレットの項目を保存しました！");
+    }
+
+    function resetWheelPreset(){
+        if(confirm("最初の項目リストに戻しますか？")){
+            wheelItems = ["焼肉 🥩","居酒屋 🍺","カフェ ☕","ラーメン 🍜","海鮮 🐟","カレー 🍛","イタリアン 🍕","中華 🥟"];
+            renderWheelEditorRows();
         }
     }
 
@@ -963,7 +1035,7 @@ GAME_CONTENT = """
 </script>
 """
 
-# --- ツール画面 (終電見張り ＆ タイマー ＆ 傾斜割り勘) ---
+# --- ツール画面 (終電キャンセルボタン付き ＆ ダブルタイマー ＆ 傾斜割り勘) ---
 TOOLS_CONTENT = """
 <div class="top-bar">
     <div class="brand">🧮 おでかけツール</div>
@@ -978,9 +1050,10 @@ TOOLS_CONTENT = """
         <span style="font-size:12px; font-weight:800; color:var(--purple);">⏰ 終電見張りアラーム</span>
         <span id="train-status" style="font-size:11px; font-weight:800; color:var(--muted);">未設定</span>
     </div>
-    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-        <input type="time" id="train-time" style="padding:8px 12px; border:1.5px solid var(--border); border-radius:10px; font-size:14px; font-weight:800; background:var(--input); color:var(--text); outline:none;">
-        <button class="btn-sm btn-purple" style="flex:1; justify-content:center;" onclick="setTrainAlarm()">終電セット</button>
+    <div style="display:flex; gap:6px; align-items:center; margin-bottom:8px;">
+        <input type="time" id="train-time" style="padding:8px 10px; border:1.5px solid var(--border); border-radius:10px; font-size:14px; font-weight:800; background:var(--input); color:var(--text); outline:none;">
+        <button class="btn-sm btn-purple" style="flex:1; justify-content:center;" onclick="setTrainAlarm()">セット</button>
+        <button class="btn-sm btn-sub" style="justify-content:center; padding:8px 10px;" onclick="cancelTrainAlarm()">解除</button>
     </div>
     <div style="font-size:11px; color:var(--muted);">※終電の30分前・15分前・定刻に通知とバイブでお知らせします</div>
 </div>
@@ -1064,18 +1137,33 @@ TOOLS_CONTENT = """
 
     let targetTrainDate = null;
     let warned30 = false, warned15 = false;
+    
     function setTrainAlarm(){
         doVibrate(30);
         const val = document.getElementById('train-time').value;
-        if(!val) return alert("終電の時刻を選択してください");
+        if(!val) return showAppAlert("エラー", "終電の時刻を選択してください");
         const parts = val.split(':');
         const now = new Date();
         const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parseInt(parts[0]), parseInt(parts[1]), 0);
         if(d < now) d.setDate(d.getDate() + 1);
         targetTrainDate = d;
         warned30 = false; warned15 = false;
-        alert(`終電を【${val}】にセットしました！`);
+        showAppAlert("終電セット完了", `終電を【${val}】にセットしました！`);
         checkTrainCountdown();
+    }
+
+    function cancelTrainAlarm(){
+        doVibrate(30);
+        if(!targetTrainDate && !document.getElementById('train-time').value){
+            return showAppAlert("ご案内", "終電アラームはセットされていません");
+        }
+        targetTrainDate = null;
+        warned30 = false; warned15 = false;
+        document.getElementById('train-time').value = '';
+        const st = document.getElementById('train-status');
+        st.innerText = '未設定';
+        st.style.color = 'var(--muted)';
+        showAppAlert("解除完了", "終電アラームを解除しました。");
     }
 
     function checkTrainCountdown(){
@@ -1086,7 +1174,7 @@ TOOLS_CONTENT = """
         if(diffMs <= 0){
             st.innerText = "終電の時刻を過ぎました！";
             st.style.color = "var(--primary)";
-            doVibrate([300,100,300]);
+            showAppAlert("⚠️ 警告", "終電の時刻を過ぎました！");
             targetTrainDate = null;
             return;
         }
@@ -1097,13 +1185,11 @@ TOOLS_CONTENT = """
 
         if(diffMin === 30 && !warned30){
             warned30 = true;
-            doVibrate([100, 100, 100]);
-            if("Notification" in window && Notification.permission === "granted") new Notification("【EAT MAP】終電まで残り30分です！");
+            showAppAlert("終電アラーム", "終電まで残り30分です！");
         }
         if(diffMin === 15 && !warned15){
             warned15 = true;
-            doVibrate([200, 100, 200]);
-            if("Notification" in window && Notification.permission === "granted") new Notification("【EAT MAP】終電まで残り15分！お会計や移動の準備を！");
+            showAppAlert("終電アラーム", "終電まで残り15分！お会計や移動の準備を！");
         }
     }
 
@@ -1121,14 +1207,21 @@ TOOLS_CONTENT = """
     }
 
     function requestNotification() {
-        if (!("Notification" in window)) return alert("この端末は通知に非対応です");
+        if (!("Notification" in window)) {
+            document.getElementById('btn-notify-perm').style.display = 'none';
+            return showAppAlert("ご案内", "お使いのブラウザはWeb通知に非対応ですが、アプリを開いている間はポップアップとバイブレーションでお知らせします。");
+        }
         Notification.requestPermission().then(perm => {
             if(perm === 'granted') {
                 document.getElementById('btn-notify-perm').innerText = "🔔 通知ON済み";
-                alert("タイマー・終電通知をONにしました！");
+                showAppAlert("完了", "バックグラウンド通知をONにしました！");
             }
         });
     }
+
+    window.addEventListener('DOMContentLoaded', ()=>{
+        if (!("Notification" in window)) document.getElementById('btn-notify-perm').style.display = 'none';
+    });
 
     function toggleTimer() {
         doVibrate(30); running = !running;
@@ -1138,17 +1231,9 @@ TOOLS_CONTENT = """
             timerId = setInterval(() => {
                 if(exitSec > 0) exitSec--;
                 if(loSec > 0) loSec--;
-                if (loSec === 0) {
-                    doVibrate([200, 100, 200]);
-                    if ("Notification" in window && Notification.permission === "granted") {
-                        new Notification("【EAT MAP】ラストオーダーの時間です！🍺");
-                    }
-                }
+                if (loSec === 0) showAppAlert("タイマー", "🍺 ラストオーダーの時間です！");
                 if (exitSec === 0) {
-                    doVibrate([300, 100, 300]);
-                    if ("Notification" in window && Notification.permission === "granted") {
-                        new Notification("【EAT MAP】お席の終了時間です！🚪");
-                    }
+                    showAppAlert("タイマー", "🚪 お席の終了時間です！");
                     clearInterval(timerId);
                 }
                 updateTimerUI();
@@ -1177,7 +1262,7 @@ TOOLS_CONTENT = """
         const disc = parseInt(document.getElementById('split-discount').value) || 0;
         const kj = parseInt(document.getElementById('split-kanji').value) || 0;
         const num = dr + ndr;
-        if(!tot || num <= 0) return alert("金額と人数を入力してください");
+        if(!tot || num <= 0) return showAppAlert("エラー", "金額と人数を入力してください");
 
         const adj = tot - kj + (disc * ndr);
         const base = Math.ceil((adj / num) / roundUnit) * roundUnit;
@@ -1205,7 +1290,7 @@ TOOLS_CONTENT = """
     function copySplitText() {
         doVibrate(30);
         const msg = getSplitMsg();
-        if(navigator.clipboard) navigator.clipboard.writeText(msg).then(() => alert("割り勘結果をコピーしました！"));
+        if(navigator.clipboard) navigator.clipboard.writeText(msg).then(() => showAppAlert("完了", "割り勘結果をコピーしました！"));
         else prompt("コピーしてください:", msg);
     }
 
@@ -1256,10 +1341,10 @@ CHAT_CONTENT = """
     .msg-ai { background:var(--tag); border-top-left-radius:4px; color:var(--text); margin-right:auto; }
     .msg-user { background:var(--primary); border-top-right-radius:4px; color:#fff; margin-left:auto; }
     .chat-box { display:flex; flex-direction:column; gap:12px; padding:14px; overflow-y:auto; height:52vh; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:10px; }
-    .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); }
+    .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; box-shadow:var(--shadow); border:none; }
     .chip-bar { display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; margin-bottom:8px; -webkit-overflow-scrolling:touch; }
     .q-chip { background:var(--tag); border:1.5px solid var(--border); border-radius:16px; padding:6px 12px; font-size:11.5px; font-weight:800; color:var(--text); white-space:nowrap; cursor:pointer; }
-    .q-chip:active { transform:scale(.94); }
+    .q-chip:active { opacity:.7; }
 </style>
 
 <div class="top-bar">
@@ -1456,23 +1541,29 @@ def tools(): return render_page(TOOLS_CONTENT)
 @app.route('/chat')
 def chat(): return render_page(CHAT_CONTENT)
 
-# Gemini API 対話（503自動回避・モデルフォールバック搭載）
+# --- 爆速・確実に対話する Gemini API ---
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     req_json = request.get_json(silent=True) or {}
-    raw_msg = str(req_json.get('message', ''))[:80]
+    raw_msg = str(req_json.get('message', ''))[:80].strip()
     msg = html.escape(raw_msg)
     
+    if msg in AI_CACHE:
+        return jsonify({"reply": AI_CACHE[msg]})
+        
     key = GEMINI_API_KEY
     if not key:
         return jsonify({"reply": "APIキーが設定されていません。"})
         
-    models = ["gemini-1.5-flash-8b", "gemini-1.5-flash", "gemini-flash-latest"]
-    prompt = f"日本の飲食店案内役として答えてください。質問「{msg}」に、親切かつ簡潔な敬語の日本語で60文字以内で即答してください。太字記号（**など）は禁止です。"
+    models = ["gemini-1.5-flash", "gemini-flash-latest"]
+    prompt = f"飲食店案内役としてユーザーの言葉「{msg}」に日本語敬語で共感や案内を60文字以内で親切に即答してください。"
     
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": 80, "temperature": 0.3}
+        "generationConfig": {
+            "maxOutputTokens": 80,
+            "temperature": 0.4
+        }
     }).encode('utf-8')
     
     headers = {
@@ -1485,14 +1576,20 @@ def api_chat():
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
         try:
             req = urllib.request.Request(url, data=payload, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as res:
+            with urllib.request.urlopen(req, timeout=12) as res:
                 res_data = json.loads(res.read().decode('utf-8'))
                 reply = res_data['candidates'][0]['content']['parts'][0]['text']
-                return jsonify({"reply": reply.replace("**", "").replace("*", "").strip()})
+                clean_reply = reply.replace("**", "").replace("*", "").strip()
+                if len(AI_CACHE) > 100: AI_CACHE.clear()
+                AI_CACHE[msg] = clean_reply
+                return jsonify({"reply": clean_reply})
         except Exception:
             continue
 
-    return jsonify({"reply": "おすすめのお店をご案内します！下のボタンから探してみてくださいね✨"})
+    # 入力内容に合わせた柔軟なフォールバック
+    if any(w in msg for w in ["眠", "つかれ", "帰る", "しんど"]):
+        return jsonify({"reply": f"お疲れさまです！無理せずゆっくり休んでくださいね。温かいシメ飯や落ち着くカフェも探せますよ✨"})
+    return jsonify({"reply": f"「{msg}」ですね！おすすめの美味しいお店を下のボタンからすぐ探せますよ✨"})
 
 @app.route('/manifest.json')
 def manifest():
