@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】地図エラー完全解消 ＆ 通常リスト・全画面マップ切替対応版 app1.py
+# 【EAT MAP】自然なAI対話 ＆ キーワード自動生成 完全統合版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
 from collections import defaultdict
@@ -204,6 +204,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
             document.documentElement.setAttribute('data-theme', c);
             localStorage.setItem('eatmap_theme', c);
             document.querySelectorAll('.theme-btn').forEach(b => b.innerText = c==='dark'?'☀️':'🌙');
+            if(typeof setMapTheme === 'function') setMapTheme(c === 'dark');
         }
         
         window.addEventListener('DOMContentLoaded', ()=>{
@@ -388,7 +389,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索画面 (通常リスト ＋ 写真通りの全画面マップ拡大切替) ---
+# --- 検索画面 (通常リスト ＋ 全画面マップ切替) ---
 RESULT_CONTENT = """
 <!-- ① 通常リストビュー -->
 <div id="view-list" class="max-w">
@@ -408,7 +409,6 @@ RESULT_CONTENT = """
         <button onclick="switchToFullMap()" style="position:absolute; top:10px; right:10px; z-index:1000; background:var(--card); border:1.5px solid var(--border); border-radius:10px; padding:6px 12px; font-size:12px; font-weight:900; box-shadow:0 2px 8px rgba(0,0,0,0.2); cursor:pointer; color:var(--text); display:flex; align-items:center; gap:4px;">⛶ 地図を拡大</button>
     </div>
 
-    <!-- 従来の縦スクロールリスト -->
     <div id="shops-list">
         {% for s in shops %}
         <div class="card shop-card" data-budget="{{ s.min_budget }}">
@@ -446,29 +446,39 @@ RESULT_CONTENT = """
     </div>
 </div>
 
-<!-- ② 写真通りの全画面マップビュー（拡大時） -->
-<div id="view-fullmap" style="display:none; position:fixed; top:0; left:0; width:100vw; height:calc(100vh - 60px); z-index:900;">
+<!-- ② 全画面マップビュー（拡大時） -->
+<style>
+    .map-wrapper { position: relative; height: calc(100vh - 65px - env(safe-area-inset-bottom)); width: 100vw; display: flex; flex-direction: column; }
+    #map-full { flex: 1; width: 100%; z-index: 1; }
+    .card-slider-container { position: absolute; bottom: 12px; left: 0; width: 100vw; z-index: 1000; overflow-x: auto; scroll-snap-type: x mandatory; display: flex; gap: 12px; padding: 0 12px 12px 12px; -webkit-overflow-scrolling: touch; transition: transform 0.3s; }
+    .card-slider-container::-webkit-scrollbar { display: none; }
+    .snap-card { scroll-snap-align: center; flex: 0 0 90%; background: var(--card); border-radius: 16px; box-shadow: 0 6px 16px rgba(0,0,0,0.2); padding: 12px; border: 1.5px solid var(--border); }
+    #route-panel { position: absolute; top: 0; left: 0; width: 100%; background: var(--card); z-index: 1001; padding: 14px 14px 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); transform: translateY(-100%); transition: transform 0.3s; border-bottom-left-radius: 16px; border-bottom-right-radius: 16px; }
+</style>
+
+<div id="view-fullmap" style="display:none; position:fixed; top:0; left:0; width:100vw; height:calc(100vh - 60px); z-index:900; background:var(--bg);">
     <div id="map-full" style="width:100%; height:100%;"></div>
 
-    <!-- 上部バー（写真通り） -->
+    <!-- 上部バー -->
     <div style="position:absolute; top:12px; left:12px; right:12px; z-index:1000; display:flex; gap:8px;">
         <div style="flex:1; background:var(--card); border-radius:12px; padding:8px 12px; box-shadow:0 4px 12px rgba(0,0,0,0.15); display:flex; align-items:center; gap:8px; font-size:13px; font-weight:800;">
-            <button onclick="switchToList()" style="background:none; border:none; font-size:16px; cursor:pointer; padding:0;">⬅️</button>
-            <div style="flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">{{ search_title }} ({{ shops|length }}件)</div>
-            <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleOpenNow()" id="btn-open">🟢 営業中</button>
+            <button onclick="switchToList()" style="background:none; border:none; font-size:16px; cursor:pointer; padding:0; display:flex; align-items:center; color:var(--muted);"><span style="background:var(--tag); padding:4px 8px; border-radius:8px;">⬅️ リストに戻る</span></button>
+            <div style="flex:1; text-align:right;">
+                <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleOpenNow()" id="btn-open">🟢 営業中</button>
+            </div>
         </div>
     </div>
     
     <button id="btn-research" onclick="doReSearch()" style="position:absolute; top:70px; left:50%; transform:translateX(-50%); z-index:1000; background:var(--primary); color:#fff; padding:8px 16px; border-radius:20px; font-weight:900; font-size:13px; box-shadow:0 4px 12px rgba(255,82,82,0.4); border:none; cursor:pointer; display:none;">📍 このエリアで再検索</button>
 
-    <!-- 右側コントロールボタン（写真通り） -->
-    <div style="position:absolute; right:12px; bottom:200px; z-index:1000; display:flex; flex-direction:column; gap:8px;">
-        <button onclick="toggle5MinCircle()" style="width:42px; height:42px; border-radius:50%; background:var(--card); border:1.5px solid var(--border); box-shadow:0 4px 12px rgba(0,0,0,0.15); font-size:18px; cursor:pointer;">🚶</button>
-        <button onclick="trackLocation()" style="width:42px; height:42px; border-radius:50%; background:var(--card); border:1.5px solid var(--border); box-shadow:0 4px 12px rgba(0,0,0,0.15); font-size:18px; cursor:pointer;">🎯</button>
+    <!-- 右側コントロールボタン -->
+    <div style="position:absolute; right:12px; bottom:200px; z-index:1000; display:flex; flex-direction:column; gap:8px;" id="map-controls">
+        <button onclick="toggle5MinCircle()" style="width:42px; height:42px; border-radius:50%; background:var(--card); border:1.5px solid var(--border); box-shadow:0 4px 12px rgba(0,0,0,0.15); font-size:18px; cursor:pointer;" title="5分圏内円">🚶</button>
+        <button onclick="trackLocation()" style="width:42px; height:42px; border-radius:50%; background:var(--card); border:1.5px solid var(--border); box-shadow:0 4px 12px rgba(0,0,0,0.15); font-size:18px; cursor:pointer;" title="現在地追従">🎯</button>
     </div>
 
     <!-- ルート案内上部パネル -->
-    <div id="route-panel" style="position:absolute; top:0; left:0; width:100%; background:var(--card); z-index:1001; padding:14px; box-shadow:0 4px 16px rgba(0,0,0,0.15); transform:translateY(-100%); transition:transform 0.3s; border-bottom-left-radius:16px; border-bottom-right-radius:16px;">
+    <div id="route-panel">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <div style="font-size:18px; font-weight:900; color:var(--blue);" id="route-summary">🚶 --分 (--m)</div>
             <button class="btn-sm" style="background:#fee2e2; color:#ef4444; border:none;" onclick="cancelRoute()">✕ 案内終了</button>
@@ -477,10 +487,10 @@ RESULT_CONTENT = """
         <div id="route-steps" style="max-height:25vh; overflow-y:auto; margin-top:10px; padding:10px; background:var(--tag); border-radius:10px; font-size:12px; font-weight:700; line-height:1.6;">経路を計算中...</div>
     </div>
 
-    <!-- 写真通りの下部スワイプカード -->
-    <div id="card-slider" style="position:absolute; bottom:12px; left:0; width:100vw; z-index:1000; overflow-x:auto; scroll-snap-type:x mandatory; display:flex; gap:12px; padding:0 14px; -webkit-overflow-scrolling:touch;">
+    <!-- 下部スワイプカード -->
+    <div class="card-slider-container" id="card-slider">
         {% for s in shops %}
-        <div class="snap-card" data-index="{{ loop.index0 }}" style="scroll-snap-align:center; flex:0 0 90%; background:var(--card); border-radius:16px; box-shadow:0 6px 16px rgba(0,0,0,0.2); padding:12px; border:1.5px solid var(--border);">
+        <div class="snap-card" data-index="{{ loop.index0 }}">
             <div style="display:flex; gap:10px;">
                 {% if s.photo %}<img src="{{ s.photo }}" style="width:70px; height:70px; border-radius:10px; object-fit:cover; background:#222; flex-shrink:0;">{% endif %}
                 <div style="flex:1; overflow:hidden;">
@@ -544,9 +554,9 @@ RESULT_CONTENT = """
         return '🍽️';
     }
 
-    // ① 通常プレビュー地図の初期化（完全無料OpenStreetMap）
+    // ① 通常プレビュー地図の初期化（完全無料OSM）
     window.addEventListener('DOMContentLoaded', () => {
-        mapPreview = L.map('map-preview', {zoomControl:false}).setView([lat, lng], 14);
+        mapPreview = L.map('map-preview', {zoomControl:false, dragging:false, touchZoom:false, scrollWheelZoom:false, doubleClickZoom:false}).setView([lat, lng], 14);
         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OSM' }).addTo(mapPreview);
 
         const bounds = [];
@@ -555,13 +565,13 @@ RESULT_CONTENT = """
                 bounds.push([s.lat, s.lng]);
                 const icon = L.divIcon({
                     className:'',
-                    html:`<div style="background:var(--primary); color:#fff; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.3); font-size:11px; font-weight:900; display:flex; align-items:center; justify-content:center; width:26px; height:26px;">${i+1}</div>`,
-                    iconSize:[26,26], iconAnchor:[13,13]
+                    html:`<div style="background:var(--primary); color:#fff; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.3); font-size:11px; font-weight:900; display:flex; align-items:center; justify-content:center; width:24px; height:24px;">${i+1}</div>`,
+                    iconSize:[24,24], iconAnchor:[12,12]
                 });
-                L.marker([s.lat, s.lng], {icon}).addTo(mapPreview).bindPopup(`<b>${s.name}</b>`);
+                L.marker([s.lat, s.lng], {icon}).addTo(mapPreview);
             }
         });
-        if(bounds.length > 0) mapPreview.fitBounds(bounds, {padding:[20,20]});
+        if(bounds.length > 0) mapPreview.fitBounds(bounds, {padding:[10,10]});
 
         // 現在地取得
         if(navigator.geolocation){
@@ -569,9 +579,11 @@ RESULT_CONTENT = """
                 uLat = pos.coords.latitude; uLng = pos.coords.longitude;
             }, ()=>{}, {timeout:5000});
         }
+        
+        enableSwipeToClose('invite-modal', closeInviteModal);
     });
 
-    // ② 写真通りの全画面マップへの切り替え
+    // ② 全画面マップへの切り替え
     function switchToFullMap(targetIdx=0) {
         doVibrate(30);
         document.getElementById('view-list').style.display = 'none';
@@ -583,21 +595,17 @@ RESULT_CONTENT = """
             mapFull.invalidateSize();
         }
 
-        setTimeout(() => {
-            focusCard(targetIdx);
-        }, 100);
+        setTimeout(() => { focusCard(targetIdx); }, 150);
     }
 
     function switchToList() {
         doVibrate(20);
         document.getElementById('view-fullmap').style.display = 'none';
         document.getElementById('view-list').style.display = 'block';
-        if(mapPreview) mapPreview.invalidateSize();
     }
 
     function initFullMap() {
         mapFull = L.map('map-full', {zoomControl:false}).setView([lat, lng], 15);
-        // 完全無料・APIキー不要の公式タイル
         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OSM' }).addTo(mapFull);
 
         const bounds = [];
@@ -610,7 +618,7 @@ RESULT_CONTENT = """
                 fullMarkers.push(marker);
             } else { fullMarkers.push(null); }
         });
-        if(bounds.length > 0) mapFull.fitBounds(bounds, {padding:[30, 200]});
+        if(bounds.length > 0) mapFull.fitBounds(bounds, {padding:[50, 200]});
 
         mapFull.on('dragend', () => { document.getElementById('btn-research').style.display = 'block'; });
 
@@ -659,8 +667,9 @@ RESULT_CONTENT = """
     function drawRoute(tLat, tLng, name) {
         doVibrate(40);
         if(!uLat || !uLng) return showAppAlert("エラー", "現在地を取得中です。GPSをONにしてください。");
-        document.getElementById('card-slider').style.display = 'none';
-        document.getElementById('route-panel').style.transform = 'translateY(0)';
+        document.getElementById('card-slider').style.transform = 'translateY(150%)'; 
+        document.getElementById('map-controls').style.bottom = '20px';
+        document.getElementById('route-panel').classList.add('active');
         document.getElementById('route-dest').innerText = `目的地: ${name}`;
         document.getElementById('route-steps').innerHTML = "経路を計算中...";
 
@@ -688,8 +697,9 @@ RESULT_CONTENT = """
     function cancelRoute() {
         doVibrate(20);
         if(routeLayer) { mapFull.removeLayer(routeLayer); routeLayer = null; }
-        document.getElementById('route-panel').style.transform = 'translateY(-100%)';
-        document.getElementById('card-slider').style.display = 'flex';
+        document.getElementById('route-panel').classList.remove('active');
+        document.getElementById('card-slider').style.transform = 'translateY(0)';
+        document.getElementById('map-controls').style.bottom = '190px';
         if(activeFullIdx > -1 && fullMarkers[activeFullIdx]) mapFull.panTo(fullMarkers[activeFullIdx].getLatLng());
     }
 
@@ -706,7 +716,10 @@ RESULT_CONTENT = """
         if(!userMarker && mapFull && uLat) {
             const curIcon = L.divIcon({
                 className:'',
-                html:`<div style="background:#3b82f6; width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 0 4px rgba(59,130,246,0.3);"></div>`,
+                html:`<div style="position:relative; width:16px; height:16px;">
+                        <div id="user-vision" style="position:absolute; top:-24px; left:-12px; width:0; height:0; border-left:20px solid transparent; border-right:20px solid transparent; border-bottom:40px solid rgba(59,130,246,0.25); transform-origin: center bottom; border-radius:40px 40px 0 0; transition: transform 0.2s;"></div>
+                        <div style="background:#3b82f6; width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 0 4px rgba(59,130,246,0.3); position:absolute; z-index:2; animation: pulse 2s infinite;"></div>
+                      </div><style>@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } 70% { box-shadow: 0 0 0 15px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }</style>`,
                 iconSize:[16,16], iconAnchor:[8,8]
             });
             userMarker = L.marker([uLat, uLng], {icon: curIcon, zIndexOffset:1000}).addTo(mapFull);
@@ -721,6 +734,12 @@ RESULT_CONTENT = """
         if(isTracking) {
             btn.style.background = 'var(--primary)'; btn.style.color = '#fff';
             if(!navigator.geolocation) return;
+            
+            // コンパス連動
+            if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission().then(p => { if(p === 'granted') window.addEventListener('deviceorientation', handleOrientation, true); }).catch(()=>{});
+            } else { window.addEventListener('deviceorientationabsolute', handleOrientation, true); }
+
             watchId = navigator.geolocation.watchPosition(pos => {
                 uLat = pos.coords.latitude; uLng = pos.coords.longitude;
                 updateFullUserMarker(); mapFull.panTo([uLat, uLng]);
@@ -728,6 +747,14 @@ RESULT_CONTENT = """
         } else {
             btn.style.background = 'var(--card)'; btn.style.color = 'var(--text)';
             if(watchId) navigator.geolocation.clearWatch(watchId);
+        }
+    }
+
+    function handleOrientation(e) {
+        let alpha = e.webkitCompassHeading || e.alpha;
+        if (alpha !== null && userMarker) {
+            const vision = document.getElementById('user-vision');
+            if(vision) vision.style.transform = `rotate(${alpha}deg)`;
         }
     }
 
@@ -781,10 +808,6 @@ RESULT_CONTENT = """
     function pinReservation(s){ doVibrate(40); const t = prompt("予約時間を入力 (例: 19:30):", "19:30"); if(t === null) return; const res = { name: s.name, time: t, course: "席のみ予約", tel: s.tel, address: s.address }; localStorage.setItem('eatmap_pinned_res', JSON.stringify(res)); showAppAlert("完了", "予約メモを固定しました！"); }
     function pinReservationFromModal(){ doVibrate(40); if(!targetShop) return; const res = { name: targetShop.name, time: document.getElementById('inv-time').value, course: "席のみ予約", tel: targetShop.tel, address: targetShop.address }; localStorage.setItem('eatmap_pinned_res', JSON.stringify(res)); closeInviteModal(); showAppAlert("完了", "予約メモを固定しました！"); }
     function toggleFav(btn, s){ doVibrate(40); let f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]'); const idx = f.findIndex(x=>x.name===s.name); if(idx>-1){ f.splice(idx,1); btn.innerHTML='♡'; btn.style.color=''; } else { s.visited=false; s.tag=""; f.push(s); btn.innerHTML='♥'; btn.style.color='var(--primary)'; } localStorage.setItem('eatmap_favs', JSON.stringify(f)); }
-
-    window.addEventListener('DOMContentLoaded', () => {
-        enableSwipeToClose('invite-modal', closeInviteModal);
-    });
 </script>
 """
 
@@ -797,7 +820,7 @@ GUIDE_CONTENT = """
     <div style="font-size:12px; opacity:.95; line-height:1.5;">お店探し・飲み会の幹事・毎日のご飯選びを爆速＆快適にするオールインワンアプリです！</div>
 </div>
 <div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>通常リスト</b>：見やすい縦スクロールでお店を比較。</li><li><b>⛶ 地図拡大</b>：ボタンを押すと全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. 爆速AIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>待ち時間なし</b>：質問するだけでおすすめジャンルやお店の選び方を即答。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. 爆速AIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>AIが自動提案</b>：質問すると最適な検索キーワードをAIが作り出し、一発でお店を案内。</li></ul></div>
 <div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple);">🧮 3. おでかけ・幹事便利ツール</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>⏰ 終電見張りアラーム</b>：終電時刻の30分前・15分前に通知＆振動。解除も可能。</li><li><b>⏱️ 退席タイマー ＆ 傾斜割り勘</b>：ラストオーダー管理や送金先付きの割り勘計算。</li></ul></div>
 <a href="/" class="btn-block btn-primary" style="margin-top:14px;">さっそく使ってみる！</a>
 </div>
@@ -852,7 +875,7 @@ FAVORITES_CONTENT = """
 # --- 抽選画面 ---
 GAME_CONTENT = """
 <div class="max-w">
-<div class="top-bar"><div class="brand">🎯 ルーレット</div><div style="display:flex; gap:6px;"><button class="btn-sm btn-sub" onclick="openWheelEditor()">✏️ 項目を編集</button></div></div>
+<div class="top-bar"><div class="brand">🎯 ルーレット</div><div style="display:flex; gap:6px;"><a href="/guide" class="btn-icon" title="機能ガイド">❓</a><button class="btn-sm btn-sub" onclick="openWheelEditor()">✏️ 項目を編集</button></div></div>
 <div class="card" style="text-align:center; padding:18px 12px; margin-bottom:12px;">
     <div style="position:relative; width:280px; height:280px; margin:0 auto 18px;">
         <div style="position:absolute; top:-12px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:12px solid transparent; border-right:12px solid transparent; border-top:22px solid var(--primary); z-index:20; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.25));"></div>
@@ -912,7 +935,7 @@ TOOLS_CONTENT = """
     <button class="btn-block btn-primary" onclick="calcSplit()">割り勘を計算する</button>
     <div id="split-res" style="display:none; background:var(--tag); padding:12px; border-radius:12px; margin-top:10px; font-size:13px; font-weight:700;">
         <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍺 飲む人:</span><b style="color:var(--primary); font-size:16px;" id="res-drinker">0円</b></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:6px;" id="box-nondrinker"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
         <div style="font-size:11px; color:var(--muted); text-align:right;" id="res-diff">余剰: 0円</div>
         <div class="input-group" style="margin-top:8px;"><input type="text" id="paypay-link" placeholder="送金先PayPay ID・リンク (任意)"></div>
         <div style="display:flex; gap:6px; margin-top:8px;"><button class="btn-sm" style="flex:1;" onclick="copySplitText()">📋 コピー</button><button class="btn-sm btn-green" style="flex:1;" onclick="shareSplit()">💬 LINE共有</button></div>
