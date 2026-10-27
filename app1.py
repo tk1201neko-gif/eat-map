@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】HotPepper × Google Places × Yahoo! × 楽天レシピ 安定版 app1.py
+# 【EAT MAP】全機能完全復元 ＆ 全API統合版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math, concurrent.futures
 from collections import defaultdict
@@ -30,6 +30,7 @@ if not GEMINI_API_KEY:
 
 # ================= 1. 安全対策・キャッシュ・セキュリティ =================
 IP_LOG = defaultdict(list)
+AI_CACHE = {}
 PLACES_CACHE = {}
 SEARCH_CACHE = {}
 RECIPE_CACHE = {}
@@ -54,13 +55,25 @@ def apply_security_and_compress(res):
     res.headers['X-Frame-Options'] = 'DENY'
     res.headers['X-XSS-Protection'] = '1; mode=block'
     res.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    res.headers['Content-Security-Policy'] = (
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:; "
+        "img-src 'self' https: data: blob:; "
+        "font-src 'self' https: data:; "
+        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://api.groq.com https://*.openstreetmap.org https://tile.openstreetmap.jp https://cyberjapandata.gsi.go.jp https://router.project-osrm.org https://places.googleapis.com https://maps.googleapis.com https://map.yahooapis.jp https://app.rakuten.co.jp;"
+    )
     if res.content_type and 'text/html' in res.content_type:
         res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    if 'gzip' in request.headers.get('Accept-Encoding', '').lower() and 200 <= res.status_code < 300 and not res.headers.get('Content-Encoding'):
+        data = res.get_data()
+        if len(data) >= 500:
+            c = gzip.compress(data)
+            res.set_data(c)
+            res.headers['Content-Encoding'] = 'gzip'
+            res.headers['Content-Length'] = str(len(c))
     return res
 
-# ================= 2. API連携エンジン =================
+# ================= 2. 各種API連携エンジン =================
 
-# Google Places API
 def fetch_google_place_rating(name, address):
     if not GOOGLE_PLACES_API_KEY: return None, 0
     clean_name = re.sub(r'\(.*?\)|（.*?）', '', name).strip()
@@ -98,7 +111,6 @@ def enrich_shops_with_google_places(shop_list):
             except Exception:
                 s["google_rating"], s["google_reviews_count"] = None, 0
 
-# Yahoo!ローカルサーチ
 def fetch_yahoo_local(keyword, lat, lng):
     if not YAHOO_CLIENT_ID: return []
     params = {"appid": YAHOO_CLIENT_ID, "output": "json", "results": 8, "gc": "01"}
@@ -134,11 +146,10 @@ def fetch_yahoo_local(keyword, lat, lng):
             return y_shops
     except Exception: return []
 
-# 楽天レシピAPI
 def fetch_rakuten_recipes(keyword):
     if not RAKUTEN_APP_ID or not keyword: return []
     clean_kw = re.sub(r'[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FA\u4E00-\u9FFF]', ' ', keyword).strip()
-    first_word = clean_kw.split()[0] if clean_kw else "簡単"
+    first_word = clean_kw.split()[0] if clean_kw else "肉"
     if first_word in RECIPE_CACHE: return RECIPE_CACHE[first_word]
 
     url = f"https://app.rakuten.co.jp/services/api/Recipe/CategoryRanking/20170426?applicationId={RAKUTEN_APP_ID}"
@@ -159,9 +170,8 @@ def fetch_rakuten_recipes(keyword):
             return recipes
     except Exception: return []
 
-# ホットペッパー API
-def fetch_shops(keyword="", area="", lat=None, lng=None, smoking=False, private_room=False, free_drink=False, midnight=False):
-    cache_key = f"{keyword}_{area}_{lat}_{lng}_{smoking}_{private_room}_{free_drink}_{midnight}"
+def fetch_shops(keyword="", area="", lat=None, lng=None, smoking=False, private_room=False, free_drink=False, midnight=False, pref_fish=False, pref_meat=False, pref_spicy=False):
+    cache_key = f"{keyword}_{area}_{lat}_{lng}_{smoking}_{private_room}_{free_drink}_{midnight}_{pref_fish}_{pref_meat}_{pref_spicy}"
     if cache_key in SEARCH_CACHE: return SEARCH_CACHE[cache_key]
 
     params = {"key": HOTPEPPER_API_KEY, "count": 20, "format": "json"}
@@ -170,6 +180,9 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, smoking=False, private_
     if midnight: params["midnight"] = 1
     parts = [p for p in [area, keyword] if p]
     if smoking and "喫煙" not in " ".join(parts): parts.append("喫煙")
+    if pref_fish: parts.append("肉 居酒屋")
+    if pref_meat: parts.append("焼肉 ステーキ 肉")
+    if pref_spicy: parts.append("和食 カフェ うどん")
     
     if lat and lng:
         params.update({"lat": lat, "lng": lng, "range": 4})
@@ -223,23 +236,50 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, smoking=False, private_
     SEARCH_CACHE[cache_key] = results
     return results
 
-# ================= 3. HTMLテンプレート =================
+# ================= 3. 共通ベーステンプレート =================
 LAYOUT_HTML = """<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>">
-    <title>EAT MAP</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#ff5252">
+    <link rel="preconnect" href="https://tile.openstreetmap.jp" crossorigin>
+    <link rel="preconnect" href="https://cyberjapandata.gsi.go.jp" crossorigin>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const savedTheme = localStorage.getItem('eatmap_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        function doVibrate(ms=30){ try{ if('vibrate' in navigator) navigator.vibrate(ms); }catch(e){} }
+        
+        function showAppAlert(title, message) {
+            doVibrate([200, 100, 200]);
+            const box = document.createElement('div');
+            box.style.position = 'fixed'; box.style.top = '20px'; box.style.left = '50%';
+            box.style.transform = 'translateX(-50%)'; box.style.background = 'var(--primary)';
+            box.style.color = '#fff'; box.style.padding = '16px'; box.style.borderRadius = '16px';
+            box.style.boxShadow = '0 6px 20px rgba(0,0,0,0.2)'; box.style.zIndex = '99999';
+            box.style.width = '90%'; box.style.maxWidth = '400px'; box.style.textAlign = 'center';
+            box.innerHTML = `<div style="font-size:16px; font-weight:900; margin-bottom:8px;">${title}</div><div style="font-size:13px; font-weight:700;">${message}</div><button onclick="this.parentElement.remove()" style="margin-top:12px; width:100%; padding:10px; background:rgba(255,255,255,0.25); border:none; border-radius:10px; color:#fff; font-weight:900; cursor:pointer;">OK</button>`;
+            document.body.appendChild(box);
+        }
+    </script>
     <style>
         :root {
             --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0;
             --text: #1e293b; --muted: #64748b;
             --primary: #ff5252; --primary-light: #fff1f2;
-            --yellow: #f59e0b; --green: #10b981; --blue: #3b82f6;
+            --yellow: #f59e0b; --green: #10b981; --blue: #3b82f6; --purple: #8b5cf6;
             --input: #ffffff; --tag: #f1f5f9; --shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
+        }
+        [data-theme="dark"] {
+            --bg: #0f172a; --card: #1e293b; --border: #334155;
+            --text: #f8fafc; --muted: #94a3b8;
+            --primary: #ff6b6b; --primary-light: #2c2125;
+            --yellow: #fbbf24; --green: #34d399; --blue: #60a5fa; --purple: #a78bfa;
+            --input: #0f172a; --tag: #283347; --shadow: 0 2px 12px rgba(0,0,0,0.25);
         }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0 0 70px 0; min-height: 100vh; }
@@ -247,13 +287,17 @@ LAYOUT_HTML = """<!DOCTYPE html>
         .card { background: var(--card); border: 1.5px solid var(--border); border-radius: 16px; padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow); position: relative; }
         .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .brand { font-size: 21px; font-weight: 900; color: var(--primary); display: flex; align-items: center; gap: 6px; text-decoration: none; }
-        .btn-sm, .btn-block { cursor: pointer; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; border: 1.5px solid var(--border); text-decoration: none; }
+        .btn-icon, .btn-sm, .btn-block { cursor: pointer; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; border: 1.5px solid var(--border); text-decoration: none; }
+        .btn-icon { background: var(--card); color: var(--text); width: 36px; height: 36px; font-size: 15px; box-shadow: var(--shadow); }
         .btn-sm { background: var(--tag); color: var(--text); padding: 8px 12px; font-size: 12px; gap: 4px; }
         .btn-block { width: 100%; min-height: 46px; font-size: 14px; gap: 6px; margin-bottom: 8px; box-shadow: var(--shadow); border: none; }
         .btn-primary { background: var(--primary); color: #fff; border:none; }
+        .btn-yellow { background: var(--yellow); color: #493800; border:none; }
+        .btn-green { background: var(--green); color: #fff; border:none; }
+        .btn-purple { background: var(--purple); color: #fff; border:none; }
         .btn-sub { background: var(--tag); color: var(--text); border: 1.5px solid var(--border); }
         .input-group { margin-bottom: 10px; }
-        .input-group input { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 14px; background: var(--input); color: var(--text); outline: none; font-weight: 700; }
+        .input-group input, .input-group select { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 14px; background: var(--input); color: var(--text); outline: none; font-weight: 700; }
         .badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 800; padding: 3px 6px; border-radius: 6px; background: var(--tag); color: var(--text); }
         .badge-primary { background: var(--primary-light); color: var(--primary); }
         .filter-chip { background: var(--tag); border: 1.5px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; font-weight: 800; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; user-select: none; }
@@ -265,26 +309,52 @@ LAYOUT_HTML = """<!DOCTYPE html>
         #loading-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center; flex-direction: column; z-index: 99999; }
         .spinner { width: 36px; height: 36px; border: 4px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
         @keyframes spin { 100% { transform: rotate(360deg); } }
+        [data-theme="light"] .leaflet-tile-pane { filter: contrast(1.06) saturate(1.12); }
+        [data-theme="dark"] .leaflet-tile-pane { filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7); }
     </style>
 </head>
 <body>
     <div id="loading-overlay"><div class="spinner"></div><div style="color:#fff; font-size:13px; font-weight:800;">店舗と評価データを取得中...</div></div>
     {{ content | safe }}
     <div class="bottom-nav">
-        <a href="/" class="active"><span class="icon">🔍</span><span>探す</span></a>
+        <a href="/" id="nav-home"><span class="icon">🔍</span><span>探す</span></a>
+        <a href="/chat" id="nav-chat"><span class="icon">💬</span><span>相談</span></a>
+        <a href="/favorites" id="nav-fav"><span class="icon">📋</span><span>記録</span></a>
+        <a href="/game" id="nav-game"><span class="icon">🎯</span><span>抽選</span></a>
+        <a href="/tools" id="nav-tools"><span class="icon">🧮</span><span>ツール</span></a>
     </div>
+    <script>
+        const p = window.location.pathname;
+        const navMap = {'/':'nav-home','/chat':'nav-chat','/favorites':'nav-fav','/game':'nav-game','/tools':'nav-tools'};
+        if(navMap[p] && document.getElementById(navMap[p])) document.getElementById(navMap[p]).classList.add('active');
+        function toggleTheme(){
+            const c = document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
+            document.documentElement.setAttribute('data-theme', c);
+            localStorage.setItem('eatmap_theme', c);
+            document.querySelectorAll('.theme-btn').forEach(b => b.innerText = c==='dark'?'☀️':'🌙');
+        }
+        window.addEventListener('DOMContentLoaded', ()=>{
+            const isDark = document.documentElement.getAttribute('data-theme')==='dark';
+            document.querySelectorAll('.theme-btn').forEach(b => b.innerText = isDark?'☀️':'🌙');
+        });
+    </script>
 </body>
 </html>"""
 
 def render_page(inner_content):
     return render_template_string(LAYOUT_HTML, content=inner_content)
 
+# ================= 4. 各画面コンテンツ =================
+
 # --- ホーム画面 ---
 HOME_CONTENT = """
 <div class="max-w">
 <div class="top-bar">
     <a href="/" class="brand">🍽️ EAT MAP</a>
-    <button class="btn-sm" onclick="window.location.reload(true)">🔄 更新</button>
+    <div style="display:flex; gap:6px;">
+        <button class="btn-icon theme-btn" onclick="toggleTheme()">🌙</button>
+        <button class="btn-icon" onclick="window.location.reload(true)">🔄</button>
+    </div>
 </div>
 
 <div class="card">
@@ -327,7 +397,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索結果画面 ---
+# --- 検索結果・店舗シート画面 ---
 RESULT_CONTENT = """
 <div id="view-list" class="max-w">
     <div class="top-bar">
@@ -482,10 +552,245 @@ RESULT_CONTENT = """
 </script>
 """
 
-# ================= 4. ルーティング =================
+# --- グルメ記録画面 ---
+FAVORITES_CONTENT = """
+<div class="max-w">
+<div class="top-bar"><div class="brand">📋 グルメ記録</div><div style="display:flex; gap:6px;"><button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 ガチャ</button></div></div>
+<div class="card" style="background:linear-gradient(135deg, #6366f1, #8b5cf6); color:#fff; border:none; margin-bottom:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div><div style="font-size:11px; font-weight:800; opacity:.9;">🏆 現在のグルメ称号</div><div style="font-size:18px; font-weight:900;" id="user-title">Lv.1 ひよっこ探検家 🐣</div></div>
+        <div style="font-size:24px;" id="badge-icon">🌟</div>
+    </div>
+    <div style="font-size:11px; margin-top:8px; display:flex; justify-content:space-between; font-weight:800;"><span id="visited-count">訪問数: 0軒</span><span id="exp-text">EXP: 0/100</span></div>
+    <div style="background:rgba(255,255,255,0.25); height:6px; border-radius:3px; overflow:hidden; margin-top:4px;"><div id="exp-bar" style="background:var(--yellow); height:100%; width:0%; transition:width .4s;"></div></div>
+</div>
+<div id="fav-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+</div>
+<script>
+    const titles = [{ lv:1, count:0, title:"Lv.1 ひよっこ探検家 🐣", icon:"🐣" },{ lv:2, count:2, title:"Lv.2 街角の食べ歩き隊 🚶", icon:"🍙" },{ lv:3, count:5, title:"Lv.3 こだわりグルメ通 🍴", icon:"🍝" },{ lv:4, count:10, title:"Lv.4 地域の名店ハンター 🏅", icon:"🥩" },{ lv:5, count:20, title:"Lv.5 伝説の美食王 👑", icon:"👑" }];
+    
+    function renderFavs(){
+        const list = document.getElementById('fav-list');
+        const f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
+        const vCount = f.filter(s => s.visited).length;
+        let cur = titles[0], nxtC = titles[1].count;
+        for(let i=0; i<titles.length; i++){ if(vCount >= titles[i].count){ cur = titles[i]; nxtC = titles[i+1] ? titles[i+1].count : vCount + 10; } }
+        document.getElementById('user-title').innerText = cur.title; document.getElementById('badge-icon').innerText = cur.icon; document.getElementById('visited-count').innerText = `訪問達成: ${vCount}軒`;
+        const eR = Math.min(100, Math.max(5, ((vCount - cur.count) / Math.max(1, (nxtC - cur.count))) * 100));
+        document.getElementById('exp-text').innerText = `次まで あと${Math.max(0, nxtC - vCount)}軒`; document.getElementById('exp-bar').style.width = eR + '%';
+        
+        if(f.length===0){ list.innerHTML = `<div class="card" style="text-align:center; color:var(--muted); font-weight:700; padding:30px 10px;">保存したお店がまだありません。</div>`; return; }
+        const tags = ["😋絶品", "🔥コスパ", "🍺酒進む", "✨雰囲気"];
+        
+        list.innerHTML = f.map((s,i)=>{
+            const rating = s.rating || 0;
+            const starsHtml = [1,2,3,4,5].map(star => `<span style="cursor:pointer; font-size:16px; color:${star <= rating ? '#f59e0b':'#cbd5e1'};" onclick="setRating(${i}, ${star})">★</span>`).join('');
+            return `
+            <div class="card" style="display:flex; flex-direction:column; padding:12px; margin-bottom:0;">
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <div style="width:65px; height:65px; border-radius:10px; overflow:hidden; flex-shrink:0; background:var(--tag); display:flex; align-items:center; justify-content:center; font-size:24px;">${s.photo ? `<img src="${s.photo}" style="width:100%; height:100%; object-fit:cover;" loading="lazy">` : '🍽️'}</div>
+                    <div style="flex:1; overflow:hidden;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                            <h3 style="margin:0 0 2px 0; font-size:13.5px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${s.name}</h3>
+                            <button class="btn-icon" style="width:22px; height:22px; font-size:11px; border:none; background:var(--tag); color:var(--muted);" onclick="delFav(${i})">✕</button>
+                        </div>
+                        <div style="font-size:10px; color:var(--muted); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📍 ${s.address}</div>
+                        <div style="display:flex; align-items:center; gap:2px; margin-bottom:4px;">
+                            ${starsHtml}
+                            <span style="font-size:10px; color:var(--muted); margin-left:4px; font-weight:800;">${rating > 0 ? rating + '.0' : '未評価'}</span>
+                        </div>
+                    </div>
+                </div>
+                ${s.visited ? `<div style="display:flex; gap:3px; margin:6px 0; overflow-x:auto;">${tags.map(t => `<span style="padding:2px 6px; font-size:9px; border-radius:6px; font-weight:800; cursor:pointer; background:${s.tag===t?'var(--yellow)':'var(--tag)'}; color:${s.tag===t?'#493800':'var(--muted)'};" onclick="setTag(${i}, '${t}')">${t}</span>`).join('')}</div>` : ''}
+                <div style="margin-top:6px;">
+                    <input type="text" value="${(s.memo||'').replace(/"/g, '&quot;')}" placeholder="📝 一言メモ (例: レモンサワー最高、奥の席が静か)" maxlength="40" style="width:100%; padding:6px 10px; border:1px solid var(--border); border-radius:8px; font-size:11px; background:var(--tag); color:var(--text); outline:none; font-weight:700;" onchange="saveMemo(${i}, this.value)">
+                </div>
+                <div style="display:flex; gap:6px; margin-top:8px;">
+                    <button class="btn-sm ${s.visited?'btn-green':'btn-sub'}" style="flex:1; padding:6px 0; font-size:10.5px; border:none;" onclick="toggleV(${i})">${s.visited?'🏁 行った！':'🚩 行ってみたい'}</button>
+                </div>
+            </div>`;
+        }).join('');
+    }
+    function setRating(i, r){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].rating = (f[i].rating === r) ? 0 : r; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
+    function saveMemo(i, val){ let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].memo = val.trim(); localStorage.setItem('eatmap_favs', JSON.stringify(f)); }
+    function toggleV(i){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].visited = !f[i].visited; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
+    function setTag(i, t){ doVibrate(20); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].tag = (f[i].tag === t) ? '' : t; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
+    function delFav(i){ if(confirm("リストから削除しますか？")){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f.splice(i,1); localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); } }
+    function pickRandomFav(){ const f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]'); if(f.length===0) return showAppAlert("ご案内", "保存したお店がありません！"); doVibrate([50, 50, 100]); const p = f[Math.floor(Math.random() * f.length)]; showAppAlert("🎲 今日のオススメ！", `【${p.name}】\\nジャンル: ${p.genre}\\n住所: ${p.address}`); }
+    window.addEventListener('DOMContentLoaded', renderFavs);
+</script>
+"""
+
+# --- 抽選（ルーレット）画面 ---
+GAME_CONTENT = """
+<div class="max-w">
+<div class="top-bar"><div class="brand">🎯 ルーレット</div></div>
+<div class="card" style="text-align:center; padding:18px 12px; margin-bottom:12px;">
+    <div style="position:relative; width:280px; height:280px; margin:0 auto 18px;">
+        <div style="position:absolute; top:-12px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:12px solid transparent; border-right:12px solid transparent; border-top:22px solid var(--primary); z-index:20;"></div>
+        <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); width:44px; height:44px; background:var(--card); border:3px solid var(--primary); border-radius:50%; z-index:15; display:flex; align-items:center; justify-content:center; font-size:18px;">🍽️</div>
+        <canvas id="wheel-canvas" width="280" height="280" style="border-radius:50%; box-shadow:var(--shadow); transition:transform 4.5s cubic-bezier(0.15, 0.9, 0.2, 1);"></canvas>
+    </div>
+    <button class="btn-block btn-primary" id="spin-btn" style="font-size:16px; min-height:50px;" onclick="spinWheel()">🎯 ルーレットを回す！</button>
+</div>
+<div class="card" id="result-box" style="display:none; text-align:center; background:var(--primary-light); border-color:var(--primary);">
+    <div style="font-size:12px; font-weight:800; color:var(--muted);">当選結果</div>
+    <div style="font-size:26px; font-weight:900; color:var(--primary); margin:8px 0;" id="res-val">--</div>
+    <a href="#" id="res-search-btn" class="btn-block btn-green" style="display:none; margin:8px auto 0;">🔍 このジャンルでお店を探す ↗</a>
+</div>
+</div>
+<script>
+    let wheelItems = ["焼肉 🥩","居酒屋 🍺","カフェ ☕","ラーメン 🍜","海鮮 🐟","カレー 🍛","イタリアン 🍕","中華 🥟"];
+    const wheelColors = ["#ffc9c9","#ffe3a8","#fff3bf","#bbf7d0","#c5f6fa","#d0ebff","#dbe4ff","#f3d9fa"]; 
+    let curDeg = 0, isSpinning = false;
+    function drawCanvas() { 
+        const canvas = document.getElementById('wheel-canvas'); if(!canvas) return; 
+        const ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, 280, 280); 
+        const num = wheelItems.length, arc = (2 * Math.PI) / num; 
+        for(let i=0; i<num; i++){ 
+            const a = i * arc; ctx.fillStyle = wheelColors[i % wheelColors.length]; ctx.beginPath(); 
+            ctx.arc(140, 140, 136, a, a + arc, false); ctx.arc(140, 140, 0, a + arc, a, true); ctx.fill(); 
+            ctx.save(); ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 2; ctx.stroke(); 
+            ctx.fillStyle = "#2d3142"; ctx.font = "bold 12.5px -apple-system, sans-serif"; 
+            ctx.translate(140 + Math.cos(a + arc/2) * 88, 140 + Math.sin(a + arc/2) * 88); 
+            ctx.rotate(a + arc/2 + Math.PI/2); ctx.fillText(wheelItems[i], -ctx.measureText(wheelItems[i]).width / 2, 0); 
+            ctx.restore(); 
+        } 
+    }
+    function spinWheel(){ 
+        if(isSpinning) return; isSpinning = true; document.getElementById('spin-btn').disabled = true; 
+        document.getElementById('result-box').style.display = 'none'; 
+        curDeg += 360 * 5 + Math.floor(Math.random() * 360); 
+        document.getElementById('wheel-canvas').style.transform = `rotate(${curDeg}deg)`; 
+        setTimeout(() => { 
+            isSpinning = false; document.getElementById('spin-btn').disabled = false; doVibrate([100, 50, 100]); 
+            const deg = curDeg % 360; const step = 360 / wheelItems.length; 
+            const idx = Math.floor((360 - deg + 270) % 360 / step); 
+            const picked = wheelItems[idx]; document.getElementById('res-val').innerText = picked; 
+            const clean = picked.replace(/[^\\u4E00-\\u9FFF\\u3040-\\u309F\\u30A0-\\u30FAa-zA-Z]/g, '').trim(); 
+            const sBtn = document.getElementById('res-search-btn'); 
+            if(clean){ sBtn.style.display = 'inline-flex'; sBtn.href = `/search?keyword=${encodeURIComponent(clean)}`; } 
+            document.getElementById('result-box').style.display = 'block'; 
+        }, 4500); 
+    }
+    window.addEventListener('DOMContentLoaded', drawCanvas);
+</script>
+"""
+
+# --- おでかけツール（終電アラーム・割り勘）画面 ---
+TOOLS_CONTENT = """
+<div class="max-w">
+<div class="top-bar"><div class="brand">🧮 おでかけツール</div></div>
+<div class="card" style="border-color:var(--purple);">
+    <div style="font-size:12px; font-weight:800; color:var(--purple); margin-bottom:8px;">⏰ 終電見張りアラーム</div>
+    <div style="display:flex; gap:6px; align-items:center;">
+        <input type="time" id="train-time" style="padding:8px 10px; border:1.5px solid var(--border); border-radius:10px; font-size:14px; font-weight:800; background:var(--input); color:var(--text); outline:none;">
+        <button class="btn-sm btn-purple" style="flex:1; justify-content:center;" onclick="setTrainAlarm()">セット</button>
+    </div>
+    <div id="train-status" style="font-size:11px; font-weight:800; color:var(--muted); margin-top:6px;">未設定</div>
+</div>
+<div class="card">
+    <div style="font-size:12px; font-weight:800; color:var(--muted); margin-bottom:10px;">💸 傾斜割り勘計算</div>
+    <div class="input-group"><input type="number" id="split-total" placeholder="合計お会計 (円)"></div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+        <div class="input-group"><input type="number" id="split-drinkers" value="2"><small style="font-size:11px; font-weight:700; color:var(--muted);">飲む人数</small></div>
+        <div class="input-group"><input type="number" id="split-nondrinkers" value="1"><small style="font-size:11px; font-weight:700; color:var(--muted);">飲まない人数</small></div>
+    </div>
+    <div class="input-group"><input type="number" id="split-discount" value="1000"><small style="font-size:11px; font-weight:700; color:var(--muted);">飲まない人の割引額 (円引)</small></div>
+    <button class="btn-block btn-primary" onclick="calcSplit()">割り勘を計算する</button>
+    <div id="split-res" style="display:none; background:var(--tag); padding:12px; border-radius:12px; margin-top:10px; font-size:13px; font-weight:700;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🍺 飲む人:</span><b style="color:var(--primary); font-size:16px;" id="res-drinker">0円</b></div>
+        <div style="display:flex; justify-content:space-between;"><span>🍵 飲まない人:</span><b style="color:var(--green); font-size:16px;" id="res-nondrinker">0円</b></div>
+    </div>
+</div>
+</div>
+<script>
+    let targetTrainDate = null;
+    function setTrainAlarm(){ 
+        const val = document.getElementById('train-time').value; if(!val) return showAppAlert("エラー", "時刻を選択してください"); 
+        const parts = val.split(':'); const now = new Date(); 
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parseInt(parts[0]), parseInt(parts[1]), 0); 
+        if(d < now) d.setDate(d.getDate() + 1); targetTrainDate = d; 
+        document.getElementById('train-status').innerText = `【${val}】にセットしました`; 
+        document.getElementById('train-status').style.color = "var(--purple)";
+        showAppAlert("完了", `終電を【${val}】にセットしました！`); 
+    }
+    function calcSplit() { 
+        const tot = parseInt(document.getElementById('split-total').value)||0, dr = parseInt(document.getElementById('split-drinkers').value)||0, ndr = parseInt(document.getElementById('split-nondrinkers').value)||0, disc = parseInt(document.getElementById('split-discount').value)||0; 
+        const num = dr + ndr; if(!tot || num <= 0) return showAppAlert("エラー", "金額と人数を入力してください"); 
+        const adj = tot + (disc * ndr); const base = Math.ceil((adj / num) / 100) * 100; const nonBase = Math.max(0, base - disc); 
+        document.getElementById('res-drinker').innerText = `${base.toLocaleString()} 円`; 
+        document.getElementById('res-nondrinker').innerText = `${nonBase.toLocaleString()} 円`; 
+        document.getElementById('split-res').style.display = 'block'; 
+    }
+</script>
+"""
+
+# --- AIコンシェルジュ相談画面 ---
+CHAT_CONTENT = """
+<style>
+    .chat-container { display:flex; flex-direction:column; height:calc(100vh - 145px); max-height:800px; }
+    .msg { max-width:85%; padding:10px 14px; border-radius:16px; font-size:13.5px; font-weight:700; line-height:1.6; word-wrap:break-word; }
+    .msg-ai { background:var(--tag); border-top-left-radius:4px; color:var(--text); margin-right:auto; }
+    .msg-user { background:var(--primary); border-top-right-radius:4px; color:#fff; margin-left:auto; }
+    .chat-box { flex:1; overflow-y:auto; padding:14px; background:var(--card); border:1.5px solid var(--border); border-radius:18px; margin-bottom:10px; display:flex; flex-direction:column; gap:12px; }
+    .s-btn { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; padding:6px 12px; border-radius:10px; font-size:11.5px; font-weight:800; text-decoration:none; margin-top:8px; border:none; }
+</style>
+<div class="max-w chat-container">
+    <div class="top-bar"><div class="brand">💬 AIコンシェルジュ</div></div>
+    <div class="chat-box" id="box">
+        <div style="display:flex; gap:8px; align-items:flex-start;">
+            <div style="font-size:24px;">🤖</div>
+            <div class="msg msg-ai">お店探しのお手伝いをします✨<br>「胃に優しい料理」「元気が出るお肉」「姫路駅周辺で個室居酒屋」など気軽に相談してください！</div>
+        </div>
+    </div>
+    <div style="display:flex; gap:8px;">
+        <input type="text" id="inp" maxlength="80" placeholder="相談を入力..." style="flex:1; padding:13px 14px; border:1.5px solid var(--border); border-radius:12px; font-size:14px; background:var(--input); color:var(--text); font-weight:700; outline:none;" onkeydown="if(event.key==='Enter' && !event.isComposing) { event.preventDefault(); send(); }">
+        <button class="btn-primary" style="width:64px; border-radius:12px; border:none; font-weight:800; cursor:pointer;" onclick="send()" id="s-btn">送信</button>
+    </div>
+</div>
+<script>
+    const box = document.getElementById('box'), inp = document.getElementById('inp'), btn = document.getElementById('s-btn');
+    async function send(){
+        const txt = inp.value.trim(); if(!txt) return;
+        doVibrate(30);
+        box.innerHTML += `<div style="display:flex; justify-content:flex-end;"><div class="msg msg-user">${txt}</div></div>`;
+        inp.value = ""; btn.disabled = true; box.scrollTop = box.scrollHeight;
+        const wId = "w-" + Date.now();
+        box.innerHTML += `<div id="${wId}" style="display:flex; gap:8px; align-items:flex-start; margin-top:4px;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai" style="color:var(--muted);"><span class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;border-top-color:var(--primary);margin:0;"></span> 考え中...</div></div>`;
+        box.scrollTop = box.scrollHeight;
+        try {
+            const res = await fetch('/api/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:txt}) });
+            const d = await res.json();
+            document.getElementById(wId).remove();
+            const clean = d.reply.replace(/\\*\\*/g,'').replace(/\\*/g,'・').replace(/\\n/g,'<br>');
+            const sKw = encodeURIComponent(d.keyword || txt);
+            box.innerHTML += `<div style="display:flex; gap:8px; align-items:flex-start;"><div style="font-size:24px;">🤖</div><div class="msg msg-ai">${clean}<br><a href="/search?keyword=${sKw}" class="s-btn">🔍 この条件で探す ↗</a></div></div>`;
+        } catch(e) {
+            document.getElementById(wId).remove();
+            box.innerHTML += `<div style="text-align:center; color:var(--primary); font-size:12px; font-weight:800;">⚠️ 通信エラーが発生しました</div>`;
+        }
+        btn.disabled = false; box.scrollTop = box.scrollHeight;
+    }
+</script>
+"""
+
+# ================= 5. ルーティング =================
+
 @app.route('/')
-def home(): 
-    return render_page(HOME_CONTENT)
+def home(): return render_page(HOME_CONTENT)
+
+@app.route('/favorites')
+def favorites(): return render_page(FAVORITES_CONTENT)
+
+@app.route('/game')
+def game(): return render_page(GAME_CONTENT)
+
+@app.route('/tools')
+def tools(): return render_page(TOOLS_CONTENT)
+
+@app.route('/chat')
+def chat(): return render_page(CHAT_CONTENT)
 
 @app.route('/search')
 def search():
@@ -503,9 +808,60 @@ def search():
     content = render_template_string(RESULT_CONTENT, shops=shops, search_title=title, recipes=recipes)
     return render_page(content)
 
+@app.route('/api/chat', methods=['POST'])
+def api_chat():
+    req_json = request.get_json(silent=True) or {}
+    raw_msg = str(req_json.get('message', ''))[:80].strip()
+    msg = html.escape(raw_msg)
+    
+    if msg in AI_CACHE: return jsonify(AI_CACHE[msg])
+    clean_reply, search_keyword = None, None
+    prompt = f"あなたは飲食店探しアプリ「EAT MAP」の親身な専属コンシェルジュです。ユーザーの言葉「{msg}」に日本語敬語で寄り添い、具体的な料理やお店の選び方を80文字以内で親切に提案してください。返答の最後に店舗検索に最適なキーワードを「【SEARCH:キーワード】」という形式で必ず1つ付けてください。"
+
+    if GROQ_API_KEY:
+        groq_payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": msg}], "max_tokens": 120, "temperature": 0.5}
+        try:
+            req = urllib.request.Request("https://api.groq.com/openai/v1/chat/completions", data=json.dumps(groq_payload).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GROQ_API_KEY}', 'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as res:
+                raw_text = json.loads(res.read().decode('utf-8'))['choices'][0]['message']['content']
+                kw_match = re.search(r'【SEARCH:(.*?)】', raw_text)
+                if kw_match:
+                    search_keyword = kw_match.group(1).strip()
+                    raw_text = re.sub(r'【SEARCH:.*?】', '', raw_text)
+                clean_reply = raw_text.replace("**", "").replace("*", "").strip()
+        except Exception: pass
+
+    if not clean_reply and GEMINI_API_KEY:
+        try:
+            req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={urllib.parse.quote(GEMINI_API_KEY)}", data=json.dumps({"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"maxOutputTokens": 120, "temperature": 0.5}}).encode('utf-8'), headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=5) as res:
+                raw_text = json.loads(res.read().decode('utf-8'))['candidates'][0]['content']['parts'][0]['text']
+                kw_match = re.search(r'【SEARCH:(.*?)】', raw_text)
+                if kw_match:
+                    search_keyword = kw_match.group(1).strip()
+                    raw_text = re.sub(r'【SEARCH:.*?】', '', raw_text)
+                clean_reply = raw_text.replace("**", "").replace("*", "").strip()
+        except Exception: pass
+
+    if not clean_reply:
+        clean_reply = f"「{msg}」ですね！今すぐ行きたくなるおすすめのお店をピックアップしてご案内しますね🍽️"
+        search_keyword = msg
+
+    res_payload = {"reply": clean_reply, "keyword": search_keyword}
+    if len(AI_CACHE) > 100: AI_CACHE.clear()
+    AI_CACHE[msg] = res_payload
+    return jsonify(res_payload)
+
+@app.route('/manifest.json')
+def manifest():
+    return jsonify({
+        "name": "EAT MAP", "short_name": "EAT MAP", "start_url": "/", "display": "standalone",
+        "background_color": "#0f172a", "theme_color": "#ff5252",
+        "icons": [{"src": "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>", "sizes": "192x192", "type": "image/svg+xml"}]
+    })
+
 @app.route('/ping')
-def ping(): 
-    return "OK", 200
+def ping(): return "OK", 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
