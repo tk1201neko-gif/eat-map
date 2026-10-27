@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】サーバークラッシュ完全修復 ＆ 全機能統合版 app1.py
+# 【EAT MAP】地図エラー完全解消 ＆ 通常リスト・全画面マップ切替対応版 app1.py
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math
 from collections import defaultdict
@@ -30,7 +30,8 @@ AI_CACHE = {}
 @app.before_request
 def firewall():
     if request.path == '/ping': return None
-    ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+    forwarded = request.headers.get('X-Forwarded-For')
+    ip = forwarded.split(',')[0].strip() if forwarded else (request.remote_addr or '127.0.0.1')
     now = time.time()
     IP_LOG[ip] = [t for t in IP_LOG[ip] if now - t < 60]
     if len(IP_LOG) > 2000:
@@ -50,7 +51,7 @@ def apply_security_and_compress(res):
         "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:; "
         "img-src 'self' https: data: blob:; "
         "font-src 'self' https: data:; "
-        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://*.cartocdn.com https://router.project-osrm.org;"
+        "connect-src 'self' https://api.open-meteo.com https://generativelanguage.googleapis.com https://*.openstreetmap.org https://tile.openstreetmap.org https://router.project-osrm.org;"
     )
     if res.content_type and 'text/html' in res.content_type:
         res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -60,7 +61,7 @@ def apply_security_and_compress(res):
             c = gzip.compress(data)
             res.set_data(c)
             res.headers['Content-Encoding'] = 'gzip'
-            res.headers['Content-Length'] = len(c)
+            res.headers['Content-Length'] = str(len(c))
     return res
 
 # ================= 2. デフォルト店舗データ =================
@@ -140,7 +141,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
             --input: #0f172a; --tag: #283347; --shadow: 0 2px 12px rgba(0,0,0,0.25);
         }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0 0 60px 0; min-height: 100vh; overflow-x: hidden; }
+        body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0 0 65px 0; min-height: 100vh; }
         .max-w { max-width: 480px; margin: 0 auto; padding: 14px; }
         .card { background: var(--card); border: 1.5px solid var(--border); border-radius: 16px; padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow); position: relative; }
         .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -160,6 +161,10 @@ LAYOUT_HTML = """<!DOCTYPE html>
         .input-group input, .input-group select { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 14px; background: var(--input); color: var(--text); outline: none; font-weight: 700; transition: border-color .2s; }
         .badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 800; padding: 3px 6px; border-radius: 6px; background: var(--tag); color: var(--text); }
         .badge-primary { background: var(--primary-light); color: var(--primary); }
+        .badge-dist { background: #e0f2fe; color: #0284c7; }
+        .badge-smoke { background: #fef3c7; color: #92400e; }
+        .badge-private { background: #fce7f3; color: #9d174d; }
+        .badge-drink { background: #ecfdf5; color: #065f46; }
         .filter-chip { background: var(--tag); border: 1.5px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; font-weight: 800; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; user-select: none; }
         .filter-chip.active { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
         
@@ -199,7 +204,6 @@ LAYOUT_HTML = """<!DOCTYPE html>
             document.documentElement.setAttribute('data-theme', c);
             localStorage.setItem('eatmap_theme', c);
             document.querySelectorAll('.theme-btn').forEach(b => b.innerText = c==='dark'?'☀️':'🌙');
-            if(typeof setMapTheme === 'function') setMapTheme(c === 'dark');
         }
         
         window.addEventListener('DOMContentLoaded', ()=>{
@@ -384,54 +388,99 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索画面 (地図メイン) ---
+# --- 検索画面 (通常リスト ＋ 写真通りの全画面マップ拡大切替) ---
 RESULT_CONTENT = """
-<style>
-    body { padding: 0; overflow: hidden; } 
-    .map-wrapper { position: relative; height: calc(100vh - 65px - env(safe-area-inset-bottom)); width: 100vw; display: flex; flex-direction: column; }
-    #map { flex: 1; width: 100%; z-index: 1; }
-    .map-top-ui { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-    .map-top-ui > * { pointer-events: auto; }
-    .top-search-bar { background: var(--card); border-radius: 12px; padding: 8px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 13px; }
-    .map-controls { position: absolute; right: 12px; bottom: 190px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; transition: bottom 0.3s; }
-    .map-controls button { pointer-events: auto; width: 44px; height: 44px; border-radius: 50%; background: var(--card); border: 2px solid var(--border); box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; align-items: center; justify-content: center; font-size: 20px; cursor: pointer; color: var(--text); }
-    .map-controls button:active { background: var(--tag); }
-    .card-slider-container { position: absolute; bottom: 12px; left: 0; width: 100vw; z-index: 1000; overflow-x: auto; scroll-snap-type: x mandatory; display: flex; gap: 12px; padding: 0 12px 12px 12px; -webkit-overflow-scrolling: touch; transition: transform 0.3s; }
-    .card-slider-container::-webkit-scrollbar { display: none; }
-    .snap-card { scroll-snap-align: center; flex: 0 0 90%; background: var(--card); border-radius: 16px; box-shadow: 0 6px 16px rgba(0,0,0,0.2); padding: 12px; border: 1.5px solid var(--border); }
-    #route-panel { position: absolute; top: 0; left: 0; width: 100%; background: var(--card); z-index: 1001; padding: 14px 14px 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); transform: translateY(-100%); transition: transform 0.3s; border-bottom-left-radius: 16px; border-bottom-right-radius: 16px; }
-    #route-panel.active { transform: translateY(0); }
-    #route-steps { max-height: 30vh; overflow-y: auto; margin-top: 10px; padding: 10px; background: var(--tag); border-radius: 12px; font-size: 12px; font-weight: 700; line-height: 1.6; }
-    .step-item { padding: 6px 0; border-bottom: 1px dashed var(--border); }
-    .step-item:last-child { border-bottom: none; }
-    #btn-research { position: absolute; top: 70px; left: 50%; transform: translateX(-50%); z-index: 1000; background: var(--primary); color: #fff; padding: 8px 16px; border-radius: 20px; font-weight: 900; font-size: 13px; box-shadow: 0 4px 12px rgba(255,82,82,0.4); border: none; cursor: pointer; display: none; pointer-events: auto; }
-</style>
+<!-- ① 通常リストビュー -->
+<div id="view-list" class="max-w">
+    <div class="top-bar">
+        <a href="/" class="btn-sm">← 戻る</a>
+        <div style="font-size:13px; font-weight:800; color:var(--muted);">{{ search_title }} ({{ shops|length }}件)</div>
+    </div>
 
-<div class="map-wrapper">
-    <div id="map"></div>
-    <div class="map-top-ui">
-        <div class="top-search-bar">
-            <a href="/" style="text-decoration:none; font-size:18px;">⬅️</a>
+    <div style="display:flex; gap:6px; margin-bottom:10px;">
+        <button class="btn-sm sort-tab" id="sort-rec" style="flex:1; justify-content:center; background:var(--primary); color:#fff; border-color:var(--primary);" onclick="sortShops('default')">⭐ おすすめ順</button>
+        <button class="btn-sm sort-tab" id="sort-price" style="flex:1; justify-content:center;" onclick="sortShops('price')">💰 予算が安い順</button>
+    </div>
+
+    <!-- 通常マッププレビュー（右上に⛶拡大ボタン） -->
+    <div style="position:relative; margin-bottom:12px;">
+        <div id="map-preview" style="height:220px; width:100%; border-radius:14px; border:1.5px solid var(--border); box-shadow:var(--shadow);"></div>
+        <button onclick="switchToFullMap()" style="position:absolute; top:10px; right:10px; z-index:1000; background:var(--card); border:1.5px solid var(--border); border-radius:10px; padding:6px 12px; font-size:12px; font-weight:900; box-shadow:0 2px 8px rgba(0,0,0,0.2); cursor:pointer; color:var(--text); display:flex; align-items:center; gap:4px;">⛶ 地図を拡大</button>
+    </div>
+
+    <!-- 従来の縦スクロールリスト -->
+    <div id="shops-list">
+        {% for s in shops %}
+        <div class="card shop-card" data-budget="{{ s.min_budget }}">
+            <button class="fav-btn" style="position:absolute; top:12px; right:12px; font-size:18px; cursor:pointer; background:var(--card); border:1.5px solid var(--border); border-radius:10px; width:34px; height:34px; display:flex; align-items:center; justify-content:center;" onclick='toggleFav(this, {{ s | tojson }})'>♡</button>
+            {% if s.photo %}<img src="{{ s.photo }}" style="width:100%; height:150px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222;" loading="lazy">{% endif %}
+            
+            <h3 class="shop-name" style="font-size:15px; font-weight:900; margin:0 0 6px 0; padding-right:40px; line-height:1.3;">
+                <span style="background:var(--primary); color:#fff; font-size:11px; padding:2px 6px; border-radius:6px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}
+            </h3>
+            
+            <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:6px;">
+                <span class="badge badge-primary">🏷️ {{ s.genre }}</span>
+                <span class="badge">💰 {{ s.budget }}</span>
+            </div>
+
+            <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px;">
+                {% if s.has_private %}<span class="badge badge-private">🚪 個室</span>{% endif %}
+                <span class="badge badge-smoke">{{ s.smoking_info }}</span>
+                {% if s.has_free_drink %}<span class="badge badge-drink">🍺 飲み放題</span>{% endif %}
+            </div>
+
+            <div style="font-size:11.5px; color:var(--muted); margin-bottom:10px; line-height:1.4;">📍 {{ s.address }}</div>
+            
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
+                <button class="btn-sm btn-sub" style="justify-content:center; padding:10px 0; border:1px solid var(--blue); color:var(--blue);" onclick='switchToFullMap({{ loop.index0 }})'>🗺️ 地図・ルート</button>
+                <a href="{{ s.url }}" target="_blank" class="btn-sm btn-primary" style="justify-content:center; padding:10px 0;">予約・詳細 ↗</a>
+            </div>
+            
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+                <button class="btn-sm btn-sub" style="justify-content:center;" onclick='openInviteModal({{ s | tojson }})'>📅 案内状作成</button>
+                <button class="btn-sm btn-sub" style="justify-content:center;" onclick='pinReservation({{ s | tojson }})'>📌 予約メモ登録</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- ② 写真通りの全画面マップビュー（拡大時） -->
+<div id="view-fullmap" style="display:none; position:fixed; top:0; left:0; width:100vw; height:calc(100vh - 60px); z-index:900;">
+    <div id="map-full" style="width:100%; height:100%;"></div>
+
+    <!-- 上部バー（写真通り） -->
+    <div style="position:absolute; top:12px; left:12px; right:12px; z-index:1000; display:flex; gap:8px;">
+        <div style="flex:1; background:var(--card); border-radius:12px; padding:8px 12px; box-shadow:0 4px 12px rgba(0,0,0,0.15); display:flex; align-items:center; gap:8px; font-size:13px; font-weight:800;">
+            <button onclick="switchToList()" style="background:none; border:none; font-size:16px; cursor:pointer; padding:0;">⬅️</button>
             <div style="flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">{{ search_title }} ({{ shops|length }}件)</div>
-            <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px;" onclick="toggleOpenNow()" id="btn-open">🟢 営業中</button>
+            <button class="btn-sm" style="background:var(--tag); border:none; padding:4px 8px; font-size:11px;" onclick="toggleOpenNow()" id="btn-open">🟢 営業中</button>
         </div>
     </div>
-    <button id="btn-research" onclick="doReSearch()">📍 このエリアで再検索</button>
-    <div class="map-controls" id="map-controls">
-        <button onclick="toggle5MinCircle()" title="5分圏内円">🚶</button>
-        <button onclick="trackLocation()" title="現在地追従">🎯</button>
+    
+    <button id="btn-research" onclick="doReSearch()" style="position:absolute; top:70px; left:50%; transform:translateX(-50%); z-index:1000; background:var(--primary); color:#fff; padding:8px 16px; border-radius:20px; font-weight:900; font-size:13px; box-shadow:0 4px 12px rgba(255,82,82,0.4); border:none; cursor:pointer; display:none;">📍 このエリアで再検索</button>
+
+    <!-- 右側コントロールボタン（写真通り） -->
+    <div style="position:absolute; right:12px; bottom:200px; z-index:1000; display:flex; flex-direction:column; gap:8px;">
+        <button onclick="toggle5MinCircle()" style="width:42px; height:42px; border-radius:50%; background:var(--card); border:1.5px solid var(--border); box-shadow:0 4px 12px rgba(0,0,0,0.15); font-size:18px; cursor:pointer;">🚶</button>
+        <button onclick="trackLocation()" style="width:42px; height:42px; border-radius:50%; background:var(--card); border:1.5px solid var(--border); box-shadow:0 4px 12px rgba(0,0,0,0.15); font-size:18px; cursor:pointer;">🎯</button>
     </div>
-    <div id="route-panel">
+
+    <!-- ルート案内上部パネル -->
+    <div id="route-panel" style="position:absolute; top:0; left:0; width:100%; background:var(--card); z-index:1001; padding:14px; box-shadow:0 4px 16px rgba(0,0,0,0.15); transform:translateY(-100%); transition:transform 0.3s; border-bottom-left-radius:16px; border-bottom-right-radius:16px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <div style="font-size:18px; font-weight:900; color:var(--blue);" id="route-summary">🚶 --分 (--m)</div>
             <button class="btn-sm" style="background:#fee2e2; color:#ef4444; border:none;" onclick="cancelRoute()">✕ 案内終了</button>
         </div>
         <div id="route-dest" style="font-size:12px; font-weight:800; color:var(--muted); margin-top:4px;">目的地: --</div>
-        <div id="route-steps">経路を計算中...</div>
+        <div id="route-steps" style="max-height:25vh; overflow-y:auto; margin-top:10px; padding:10px; background:var(--tag); border-radius:10px; font-size:12px; font-weight:700; line-height:1.6;">経路を計算中...</div>
     </div>
-    <div class="card-slider-container" id="card-slider">
+
+    <!-- 写真通りの下部スワイプカード -->
+    <div id="card-slider" style="position:absolute; bottom:12px; left:0; width:100vw; z-index:1000; overflow-x:auto; scroll-snap-type:x mandatory; display:flex; gap:12px; padding:0 14px; -webkit-overflow-scrolling:touch;">
         {% for s in shops %}
-        <div class="snap-card" data-index="{{ loop.index0 }}" data-lat="{{ s.lat }}" data-lng="{{ s.lng }}">
+        <div class="snap-card" data-index="{{ loop.index0 }}" style="scroll-snap-align:center; flex:0 0 90%; background:var(--card); border-radius:16px; box-shadow:0 6px 16px rgba(0,0,0,0.2); padding:12px; border:1.5px solid var(--border);">
             <div style="display:flex; gap:10px;">
                 {% if s.photo %}<img src="{{ s.photo }}" style="width:70px; height:70px; border-radius:10px; object-fit:cover; background:#222; flex-shrink:0;">{% endif %}
                 <div style="flex:1; overflow:hidden;">
@@ -439,7 +488,7 @@ RESULT_CONTENT = """
                         <span style="background:var(--primary); color:#fff; font-size:10px; padding:1px 5px; border-radius:4px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}
                     </div>
                     <div style="font-size:10px; color:var(--muted); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📍 {{ s.address }}</div>
-                    <div style="display:flex; flex-wrap:wrap; gap:3px; margin-bottom:6px;">
+                    <div style="display:flex; flex-wrap:wrap; gap:3px;">
                         <span class="badge badge-primary">💰 {{ s.budget }}</span>
                         {% if s.has_private %}<span class="badge badge-private">🚪個室</span>{% endif %}
                         <span class="badge badge-smoke">{{ s.smoking_info }}</span>
@@ -447,14 +496,15 @@ RESULT_CONTENT = """
                 </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px;">
-                <button class="btn-sm btn-sub" style="justify-content:center; padding:10px 0; border:1px solid var(--blue); color:var(--blue);" onclick='drawRoute({{ s.lat }}, {{ s.lng }}, "{{ s.name }}")'>🚶 ルート案内</button>
-                <button class="btn-sm btn-sub" style="justify-content:center; padding:10px 0;" onclick='openInviteModal({{ s | tojson }})'>📅 案内状/メモ</button>
+                <button class="btn-sm btn-sub" style="justify-content:center; padding:9px 0; border:1px solid var(--blue); color:var(--blue);" onclick='drawRoute({{ s.lat }}, {{ s.lng }}, "{{ s.name }}")'>🚶 ルート案内</button>
+                <button class="btn-sm btn-sub" style="justify-content:center; padding:9px 0;" onclick='openInviteModal({{ s | tojson }})'>📅 案内状/メモ</button>
             </div>
         </div>
         {% endfor %}
     </div>
 </div>
 
+<!-- 案内状・予約メモモーダル -->
 <div id="invite-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:flex-end; align-items:center; padding:14px; flex-direction:column;">
     <div class="card swipe-modal-content" style="width:100%; max-width:440px; margin:0 0 env(safe-area-inset-bottom); background:var(--card);">
         <div class="swipe-handle"></div>
@@ -478,8 +528,10 @@ RESULT_CONTENT = """
     let shops = {{ shops | tojson | safe }};
     const lat = (shops.length>0 && shops[0].lat) ? shops[0].lat : 34.8290;
     const lng = (shops.length>0 && shops[0].lng) ? shops[0].lng : 134.6900;
-    let map, markers = [], routeLayer = null, circle5m = null, userMarker = null;
-    let watchId = null, isTracking = false, uLat = null, uLng = null, mapTileLayer = null;
+    
+    let mapPreview = null, mapFull = null;
+    let fullMarkers = [], routeLayer = null, circle5m = null, userMarker = null;
+    let uLat = null, uLng = null, isTracking = false, watchId = null;
 
     function getGenreEmoji(genre) {
         if(!genre) return '🍽️';
@@ -487,171 +539,191 @@ RESULT_CONTENT = """
         if(genre.includes('焼肉') || genre.includes('肉')) return '🍖';
         if(genre.includes('カフェ') || genre.includes('スイーツ')) return '☕';
         if(genre.includes('ラーメン') || genre.includes('麺')) return '🍜';
-        if(genre.includes('海鮮') || genre.includes('魚') || genre.includes('寿司')) return '🐟';
-        if(genre.includes('イタリアン') || genre.includes('フレンチ')) return '🍕';
-        if(genre.includes('和食')) return '🍣';
+        if(genre.includes('海鮮') || genre.includes('魚')) return '🐟';
+        if(genre.includes('イタリアン')) return '🍕';
         return '🍽️';
     }
 
-    function setMapTheme(isDark) {
-        if(!map) return;
-        const url = isDark 
-            ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-            : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
-        if(mapTileLayer) map.removeLayer(mapTileLayer);
-        mapTileLayer = L.tileLayer(url, { maxZoom: 19, attribution: '&copy; OSM &copy; CARTO' }).addTo(map);
-    }
-
-    setTimeout(() => {
-        map = L.map('map', {zoomControl:false}).setView([lat, lng], 14);
-        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        setMapTheme(isDark);
+    // ① 通常プレビュー地図の初期化（完全無料OpenStreetMap）
+    window.addEventListener('DOMContentLoaded', () => {
+        mapPreview = L.map('map-preview', {zoomControl:false}).setView([lat, lng], 14);
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OSM' }).addTo(mapPreview);
 
         const bounds = [];
         shops.forEach((s, i) => {
             if(s.lat && s.lng){
                 bounds.push([s.lat, s.lng]);
-                const icon = createPinIcon(i+1, false, s.genre);
-                const marker = L.marker([s.lat, s.lng], {icon}).addTo(map);
-                marker.on('click', () => focusCard(i));
-                markers.push(marker);
-            } else { markers.push(null); }
+                const icon = L.divIcon({
+                    className:'',
+                    html:`<div style="background:var(--primary); color:#fff; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.3); font-size:11px; font-weight:900; display:flex; align-items:center; justify-content:center; width:26px; height:26px;">${i+1}</div>`,
+                    iconSize:[26,26], iconAnchor:[13,13]
+                });
+                L.marker([s.lat, s.lng], {icon}).addTo(mapPreview).bindPopup(`<b>${s.name}</b>`);
+            }
         });
-        if(bounds.length > 0) map.fitBounds(bounds, {padding: [30, 200], maxZoom: 16});
+        if(bounds.length > 0) mapPreview.fitBounds(bounds, {padding:[20,20]});
 
-        map.on('dragend', () => { document.getElementById('btn-research').style.display = 'block'; });
+        // 現在地取得
+        if(navigator.geolocation){
+            navigator.geolocation.getCurrentPosition(pos => {
+                uLat = pos.coords.latitude; uLng = pos.coords.longitude;
+            }, ()=>{}, {timeout:5000});
+        }
+    });
 
+    // ② 写真通りの全画面マップへの切り替え
+    function switchToFullMap(targetIdx=0) {
+        doVibrate(30);
+        document.getElementById('view-list').style.display = 'none';
+        document.getElementById('view-fullmap').style.display = 'block';
+
+        if(!mapFull) {
+            initFullMap();
+        } else {
+            mapFull.invalidateSize();
+        }
+
+        setTimeout(() => {
+            focusCard(targetIdx);
+        }, 100);
+    }
+
+    function switchToList() {
+        doVibrate(20);
+        document.getElementById('view-fullmap').style.display = 'none';
+        document.getElementById('view-list').style.display = 'block';
+        if(mapPreview) mapPreview.invalidateSize();
+    }
+
+    function initFullMap() {
+        mapFull = L.map('map-full', {zoomControl:false}).setView([lat, lng], 15);
+        // 完全無料・APIキー不要の公式タイル
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OSM' }).addTo(mapFull);
+
+        const bounds = [];
+        shops.forEach((s, i) => {
+            if(s.lat && s.lng){
+                bounds.push([s.lat, s.lng]);
+                const icon = createEmojiPin(i+1, false, s.genre);
+                const marker = L.marker([s.lat, s.lng], {icon}).addTo(mapFull);
+                marker.on('click', () => focusCard(i));
+                fullMarkers.push(marker);
+            } else { fullMarkers.push(null); }
+        });
+        if(bounds.length > 0) mapFull.fitBounds(bounds, {padding:[30, 200]});
+
+        mapFull.on('dragend', () => { document.getElementById('btn-research').style.display = 'block'; });
+
+        // スワイプ連動
         const slider = document.getElementById('card-slider');
         const observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if(entry.isIntersecting && entry.intersectionRatio > 0.5){
                     const idx = parseInt(entry.target.dataset.index);
-                    highlightMarker(idx);
+                    highlightFullMarker(idx);
                 }
             });
         }, { root: slider, threshold: 0.6 });
         document.querySelectorAll('.snap-card').forEach(c => observer.observe(c));
 
-        if(navigator.geolocation){
-            navigator.geolocation.getCurrentPosition(pos => {
-                uLat = pos.coords.latitude; uLng = pos.coords.longitude;
-                updateUserMarker();
-            }, ()=>{}, {timeout:5000});
-        }
-        
-        enableSwipeToClose('invite-modal', closeInviteModal);
-    }, 50);
+        if(uLat && uLng) updateFullUserMarker();
+    }
 
-    function createPinIcon(num, isHighlight, genre) {
+    function createEmojiPin(num, isHighlight, genre) {
         const emoji = getGenreEmoji(genre);
         const bg = isHighlight ? 'var(--yellow)' : 'var(--primary)';
         const col = isHighlight ? '#493800' : '#fff';
         const scale = isHighlight ? 'transform: scale(1.15) translateY(-5px); z-index:1000;' : '';
         return L.divIcon({
             className:'',
-            html:`<div style="background:${bg}; color:${col}; border-radius:50%; border:2px solid #fff; box-shadow:0 4px 10px rgba(0,0,0,0.3); display:flex; flex-direction:column; align-items:center; justify-content:center; width:34px; height:34px; transition:all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); ${scale}"><span style="font-size:10.5px; font-weight:900; line-height:1;">${num}</span><span style="font-size:14px; line-height:1;">${emoji}</span></div>`,
+            html:`<div style="background:${bg}; color:${col}; border-radius:50%; border:2px solid #fff; box-shadow:0 4px 10px rgba(0,0,0,0.3); display:flex; flex-direction:column; align-items:center; justify-content:center; width:34px; height:34px; transition:all 0.3s; ${scale}"><span style="font-size:10px; font-weight:900; line-height:1;">${num}</span><span style="font-size:13px; line-height:1;">${emoji}</span></div>`,
             iconSize:[34,34], iconAnchor:[17,17]
         });
     }
 
-    let activeIdx = -1;
-    function highlightMarker(idx) {
-        if(activeIdx === idx || !markers[idx]) return;
-        if(activeIdx > -1 && markers[activeIdx]) markers[activeIdx].setIcon(createPinIcon(activeIdx+1, false, shops[activeIdx].genre));
-        markers[idx].setIcon(createPinIcon(idx+1, true, shops[idx].genre));
-        map.panTo(markers[idx].getLatLng(), {animate:true, duration:0.3});
-        activeIdx = idx;
+    let activeFullIdx = -1;
+    function highlightFullMarker(idx) {
+        if(activeFullIdx === idx || !fullMarkers[idx]) return;
+        if(activeFullIdx > -1 && fullMarkers[activeFullIdx]) fullMarkers[activeFullIdx].setIcon(createEmojiPin(activeFullIdx+1, false, shops[activeFullIdx].genre));
+        fullMarkers[idx].setIcon(createEmojiPin(idx+1, true, shops[idx].genre));
+        mapFull.panTo(fullMarkers[idx].getLatLng(), {animate:true, duration:0.3});
+        activeFullIdx = idx;
     }
+
     function focusCard(idx) {
         const cards = document.querySelectorAll('.snap-card');
         if(cards[idx]) cards[idx].scrollIntoView({behavior: 'smooth', block: 'nearest', inline: 'center'});
     }
 
+    // 🚶 アプリ内ルート案内
     function drawRoute(tLat, tLng, name) {
         doVibrate(40);
-        if(!uLat || !uLng) return showAppAlert("エラー", "現在地が取得できていません。GPSをオンにしてください。");
-        document.getElementById('card-slider').style.transform = 'translateY(150%)'; 
-        document.getElementById('map-controls').style.bottom = '20px';
-        document.getElementById('route-panel').classList.add('active');
+        if(!uLat || !uLng) return showAppAlert("エラー", "現在地を取得中です。GPSをONにしてください。");
+        document.getElementById('card-slider').style.display = 'none';
+        document.getElementById('route-panel').style.transform = 'translateY(0)';
         document.getElementById('route-dest').innerText = `目的地: ${name}`;
         document.getElementById('route-steps').innerHTML = "経路を計算中...";
+
         const url = `https://router.project-osrm.org/route/v1/foot/${uLng},${uLat};${tLng},${tLat}?overview=full&geometries=geojson&steps=true`;
         fetch(url).then(r=>r.json()).then(data => {
             if(data.code !== 'Ok') return document.getElementById('route-steps').innerHTML = "ルートが見つかりませんでした。";
             const route = data.routes[0];
             document.getElementById('route-summary').innerText = `🚶 徒歩 約${Math.ceil(route.duration/60)}分 (${Math.round(route.distance)}m)`;
-            if(routeLayer) map.removeLayer(routeLayer);
-            routeLayer = L.geoJSON(route.geometry, { style: { color: '#3b82f6', weight: 6, opacity: 0.8, lineJoin: 'round' } }).addTo(map);
-            map.fitBounds(routeLayer.getBounds(), {padding:[50,150]});
+            if(routeLayer) mapFull.removeLayer(routeLayer);
+            routeLayer = L.geoJSON(route.geometry, { style: { color: '#3b82f6', weight: 6, opacity: 0.85, lineJoin: 'round' } }).addTo(mapFull);
+            mapFull.fitBounds(routeLayer.getBounds(), {padding:[50, 80]});
+
             const steps = route.legs[0].steps; let stepHtml = '';
             steps.forEach((s, i) => {
                 if(s.distance > 0 && s.maneuver.type !== 'arrive') {
                     let dir = "進む";
                     if(s.maneuver.modifier) { if(s.maneuver.modifier.includes('right')) dir = "右折 ⤴"; if(s.maneuver.modifier.includes('left')) dir = "左折 ⤵"; }
-                    const n = s.name ? `「${s.name}」を` : "";
-                    stepHtml += `<div class="step-item"><span style="color:var(--primary);">${i+1}.</span> ${Math.round(s.distance)}m 先 ${n}${dir}</div>`;
+                    stepHtml += `<div style="padding:4px 0; border-bottom:1px dashed var(--border);"><span style="color:var(--primary);">${i+1}.</span> ${Math.round(s.distance)}m 先 ${s.name ? '「'+s.name+'」を ' : ''}${dir}</div>`;
                 }
             });
-            document.getElementById('route-steps').innerHTML = stepHtml + `<div class="step-item" style="color:var(--green);">🏁 目的地に到着</div>`;
+            document.getElementById('route-steps').innerHTML = stepHtml + `<div style="padding:4px 0; color:var(--green); font-weight:900;">🏁 目的地に到着</div>`;
         }).catch(() => { document.getElementById('route-steps').innerHTML = "ルート計算に失敗しました。"; });
     }
+
     function cancelRoute() {
         doVibrate(20);
-        if(routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-        document.getElementById('route-panel').classList.remove('active');
-        document.getElementById('card-slider').style.transform = 'translateY(0)';
-        document.getElementById('map-controls').style.bottom = '190px';
-        if(activeIdx > -1 && markers[activeIdx]) map.panTo(markers[activeIdx].getLatLng());
+        if(routeLayer) { mapFull.removeLayer(routeLayer); routeLayer = null; }
+        document.getElementById('route-panel').style.transform = 'translateY(-100%)';
+        document.getElementById('card-slider').style.display = 'flex';
+        if(activeFullIdx > -1 && fullMarkers[activeFullIdx]) mapFull.panTo(fullMarkers[activeFullIdx].getLatLng());
     }
 
     function doReSearch() {
         doVibrate(40);
-        const center = map.getCenter();
+        const center = mapFull.getCenter();
         document.getElementById('loading-overlay').style.display = 'flex';
         const urlParams = new URLSearchParams(window.location.search);
         urlParams.set('lat', center.lat.toFixed(6)); urlParams.set('lng', center.lng.toFixed(6)); urlParams.set('area', 'マップ中心周辺');
         window.location.href = '/search?' + urlParams.toString();
     }
 
-    let compassHandlerAdded = false;
-    function handleOrientation(e) {
-        let alpha = e.webkitCompassHeading || e.alpha;
-        if (alpha !== null && userMarker) {
-            const vision = document.getElementById('user-vision');
-            if(vision) vision.style.transform = `rotate(${alpha}deg)`;
-        }
-    }
-    function updateUserMarker(){
-        if(!userMarker && map && uLat){
+    function updateFullUserMarker() {
+        if(!userMarker && mapFull && uLat) {
             const curIcon = L.divIcon({
                 className:'',
-                html:`<div style="position:relative; width:16px; height:16px;">
-                        <div id="user-vision" style="position:absolute; top:-24px; left:-12px; width:0; height:0; border-left:20px solid transparent; border-right:20px solid transparent; border-bottom:40px solid rgba(59,130,246,0.25); transform-origin: center bottom; border-radius:40px 40px 0 0; transition: transform 0.2s;"></div>
-                        <div style="background:#3b82f6; width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 0 4px rgba(59,130,246,0.3); position:absolute; z-index:2; animation: pulse 2s infinite;"></div>
-                      </div><style>@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } 70% { box-shadow: 0 0 0 15px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }</style>`,
+                html:`<div style="background:#3b82f6; width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 0 4px rgba(59,130,246,0.3);"></div>`,
                 iconSize:[16,16], iconAnchor:[8,8]
             });
-            userMarker = L.marker([uLat, uLng], {icon: curIcon, zIndexOffset: 1000}).addTo(map);
+            userMarker = L.marker([uLat, uLng], {icon: curIcon, zIndexOffset:1000}).addTo(mapFull);
         } else if(userMarker && uLat) {
             userMarker.setLatLng([uLat, uLng]);
         }
     }
-    
+
     function trackLocation() {
         doVibrate(30); isTracking = !isTracking;
         const btn = document.querySelector('button[title="現在地追従"]');
         if(isTracking) {
             btn.style.background = 'var(--primary)'; btn.style.color = '#fff';
-            if(!compassHandlerAdded) {
-                if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                    DeviceOrientationEvent.requestPermission().then(p => { if(p === 'granted') window.addEventListener('deviceorientation', handleOrientation, true); }).catch(()=>{});
-                } else { window.addEventListener('deviceorientationabsolute', handleOrientation, true); }
-                compassHandlerAdded = true;
-            }
             if(!navigator.geolocation) return;
             watchId = navigator.geolocation.watchPosition(pos => {
                 uLat = pos.coords.latitude; uLng = pos.coords.longitude;
-                updateUserMarker(); map.panTo([uLat, uLng]);
+                updateFullUserMarker(); mapFull.panTo([uLat, uLng]);
             }, e=>{}, {enableHighAccuracy:true});
         } else {
             btn.style.background = 'var(--card)'; btn.style.color = 'var(--text)';
@@ -661,13 +733,12 @@ RESULT_CONTENT = """
 
     function toggle5MinCircle() {
         doVibrate(20);
-        if(!uLat) return showAppAlert("エラー", "現在地を取得中か、GPSがオフになっています。");
-        const btn = document.querySelector('button[title="5分圏内円"]');
+        if(!uLat) return showAppAlert("エラー", "現在地を取得中です。");
         if(circle5m) {
-            map.removeLayer(circle5m); circle5m = null; btn.style.background = 'var(--card)'; btn.style.color = 'var(--text)';
+            mapFull.removeLayer(circle5m); circle5m = null;
         } else {
-            circle5m = L.circle([uLat, uLng], { radius: 400, color: '#10b981', fillColor: '#10b981', fillOpacity: 0.1, weight:2 }).addTo(map);
-            map.fitBounds(circle5m.getBounds(), {padding:[20,20]}); btn.style.background = 'var(--green)'; btn.style.color = '#fff';
+            circle5m = L.circle([uLat, uLng], { radius: 400, color: '#10b981', fillColor: '#10b981', fillOpacity: 0.1, weight:2 }).addTo(mapFull);
+            mapFull.fitBounds(circle5m.getBounds(), {padding:[20,20]});
         }
     }
 
@@ -678,36 +749,64 @@ RESULT_CONTENT = """
         btn.style.background = hideClosed ? 'var(--green)' : 'var(--tag)'; btn.style.color = hideClosed ? '#fff' : 'var(--text)';
         const curH = new Date().getHours(); const isLate = curH >= 23 || curH < 5;
         shops.forEach((s, i) => {
-            if(!markers[i]) return;
+            if(!fullMarkers[i]) return;
             let isOpen = true;
             if(hideClosed && isLate && !s.open.includes('翌') && !s.open.includes('24')) isOpen = false;
-            if(isOpen) map.addLayer(markers[i]); else map.removeLayer(markers[i]);
+            if(isOpen) mapFull.addLayer(fullMarkers[i]); else mapFull.removeLayer(fullMarkers[i]);
         });
+    }
+
+    function sortShops(type){
+        doVibrate(30);
+        document.querySelectorAll('.sort-tab').forEach(t => { t.style.background = 'var(--tag)'; t.style.color = 'var(--text)'; });
+        const container = document.getElementById('shops-list');
+        const cards = Array.from(container.children);
+        if(type==='price'){
+            document.getElementById('sort-price').style.background='var(--primary)'; document.getElementById('sort-price').style.color='#fff';
+            cards.sort((a,b)=> parseInt(a.dataset.budget||0) - parseInt(b.dataset.budget||0));
+        } else {
+            document.getElementById('sort-rec').style.background='var(--primary)'; document.getElementById('sort-rec').style.color='#fff';
+            cards.sort((a,b)=> parseInt(a.querySelector('.shop-name span').innerText) - parseInt(b.querySelector('.shop-name span').innerText));
+        }
+        cards.forEach(c => container.appendChild(c));
     }
 
     let targetShop = null;
     function openInviteModal(s){ doVibrate(30); targetShop = s; document.getElementById('inv-time').value = "今週 19:30〜"; document.getElementById('inv-fee').value = s.budget || "割り勘"; updateInvitePreview(); document.getElementById('invite-modal').style.display = 'flex'; }
     function closeInviteModal(){ document.getElementById('invite-modal').style.display = 'none'; }
-    function updateInvitePreview(){ if(!targetShop) return; const t = document.getElementById('inv-time').value.trim(); const f = document.getElementById('inv-fee').value.trim(); document.getElementById('inv-preview').value = `📢【飲み会・お食事会のご案内】\\n\\n📅 日時: ${t}\\n🍽️ 店名: ${targetShop.name}\\n💰 予算: ${f}\\n📍 住所: ${targetShop.address}\\n🔗 詳細: ${targetShop.url}\\n\\nよろしくお願いします！✨`; }
+    function updateInvitePreview(){ if(!targetShop) return; const t = document.getElementById('inv-time').value.trim(); const f = document.getElementById('inv-fee').value.trim(); document.getElementById('inv-preview').value = `📢【お食事会のご案内】\\n\\n📅 日時: ${t}\\n🍽️ 店名: ${targetShop.name}\\n💰 予算: ${f}\\n📍 住所: ${targetShop.address}\\n🔗 詳細: ${targetShop.url}\\n\\nよろしくお願いします！✨`; }
     document.getElementById('inv-time').addEventListener('input', updateInvitePreview); document.getElementById('inv-fee').addEventListener('input', updateInvitePreview);
     function copyInviteText(){ doVibrate(30); const txt = document.getElementById('inv-preview').value; if(navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>showAppAlert("完了","案内文をコピーしました！")); else prompt("コピー:", txt); }
     function sendInviteLine(){ doVibrate(30); const txt = document.getElementById('inv-preview').value; window.open(`https://line.me/R/msg/text/?${encodeURIComponent(txt)}`, '_blank'); }
-    function pinReservationFromModal(){
-        doVibrate(40); if(!targetShop) return;
-        const res = { name: targetShop.name, time: document.getElementById('inv-time').value, course: "席のみ予約", tel: targetShop.tel, address: targetShop.address };
-        localStorage.setItem('eatmap_pinned_res', JSON.stringify(res)); closeInviteModal();
-        showAppAlert("登録完了", "ホーム最上部に今夜の予約メモをピン留めしました！");
-    }
+    function pinReservation(s){ doVibrate(40); const t = prompt("予約時間を入力 (例: 19:30):", "19:30"); if(t === null) return; const res = { name: s.name, time: t, course: "席のみ予約", tel: s.tel, address: s.address }; localStorage.setItem('eatmap_pinned_res', JSON.stringify(res)); showAppAlert("完了", "予約メモを固定しました！"); }
+    function pinReservationFromModal(){ doVibrate(40); if(!targetShop) return; const res = { name: targetShop.name, time: document.getElementById('inv-time').value, course: "席のみ予約", tel: targetShop.tel, address: targetShop.address }; localStorage.setItem('eatmap_pinned_res', JSON.stringify(res)); closeInviteModal(); showAppAlert("完了", "予約メモを固定しました！"); }
+    function toggleFav(btn, s){ doVibrate(40); let f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]'); const idx = f.findIndex(x=>x.name===s.name); if(idx>-1){ f.splice(idx,1); btn.innerHTML='♡'; btn.style.color=''; } else { s.visited=false; s.tag=""; f.push(s); btn.innerHTML='♥'; btn.style.color='var(--primary)'; } localStorage.setItem('eatmap_favs', JSON.stringify(f)); }
+
+    window.addEventListener('DOMContentLoaded', () => {
+        enableSwipeToClose('invite-modal', closeInviteModal);
+    });
 </script>
+"""
+
+# --- ガイド画面 ---
+GUIDE_CONTENT = """
+<div class="max-w">
+<div class="top-bar"><a href="/" class="btn-sm">← ホームへ</a><div style="font-size:13px; font-weight:800; color:var(--muted);">アプリの使い方</div></div>
+<div class="card" style="background:linear-gradient(135deg, var(--primary), #e11d48); color:#fff; border:none; margin-bottom:12px;">
+    <div style="font-size:20px; font-weight:900; margin-bottom:4px;">🍽️ EAT MAP ガイド</div>
+    <div style="font-size:12px; opacity:.95; line-height:1.5;">お店探し・飲み会の幹事・毎日のご飯選びを爆速＆快適にするオールインワンアプリです！</div>
+</div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. お店探索 ＆ 全画面マップ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>通常リスト</b>：見やすい縦スクロールでお店を比較。</li><li><b>⛶ 地図拡大</b>：ボタンを押すと全画面マップになり、スワイプでお店を直感的に探せます。</li><li><b>アプリ内ルート案内</b>：地図上に直接青い道順が引かれ、徒歩分数を案内します。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. 爆速AIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>待ち時間なし</b>：質問するだけでおすすめジャンルやお店の選び方を即答。</li></ul></div>
+<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple);">🧮 3. おでかけ・幹事便利ツール</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>⏰ 終電見張りアラーム</b>：終電時刻の30分前・15分前に通知＆振動。解除も可能。</li><li><b>⏱️ 退席タイマー ＆ 傾斜割り勘</b>：ラストオーダー管理や送金先付きの割り勘計算。</li></ul></div>
+<a href="/" class="btn-block btn-primary" style="margin-top:14px;">さっそく使ってみる！</a>
+</div>
 """
 
 # --- グルメ記録画面 ---
 FAVORITES_CONTENT = """
 <div class="max-w">
-<div class="top-bar">
-    <div class="brand">📋 グルメ記録</div>
-    <div style="display:flex; gap:6px;"><button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 ガチャ</button></div>
-</div>
+<div class="top-bar"><div class="brand">📋 グルメ記録</div><div style="display:flex; gap:6px;"><button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 ガチャ</button></div></div>
 <div class="card" style="background:linear-gradient(135deg, #6366f1, #8b5cf6); color:#fff; border:none; margin-bottom:12px;">
     <div style="display:flex; justify-content:space-between; align-items:center;">
         <div><div style="font-size:11px; font-weight:800; opacity:.9;">🏆 現在のグルメ称号</div><div style="font-size:18px; font-weight:900;" id="user-title">Lv.1 ひよっこ探検家 🐣</div></div>
@@ -753,7 +852,7 @@ FAVORITES_CONTENT = """
 # --- 抽選画面 ---
 GAME_CONTENT = """
 <div class="max-w">
-<div class="top-bar"><div class="brand">🎯 ルーレット</div><div style="display:flex; gap:6px;"><a href="/guide" class="btn-icon" title="機能ガイド">❓</a><button class="btn-sm btn-sub" onclick="openWheelEditor()">✏️ 項目を編集</button></div></div>
+<div class="top-bar"><div class="brand">🎯 ルーレット</div><div style="display:flex; gap:6px;"><button class="btn-sm btn-sub" onclick="openWheelEditor()">✏️ 項目を編集</button></div></div>
 <div class="card" style="text-align:center; padding:18px 12px; margin-bottom:12px;">
     <div style="position:relative; width:280px; height:280px; margin:0 auto 18px;">
         <div style="position:absolute; top:-12px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:12px solid transparent; border-right:12px solid transparent; border-top:22px solid var(--primary); z-index:20; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.25));"></div>
@@ -858,21 +957,6 @@ CHAT_CONTENT = """
 </script>
 """
 
-# --- ガイド画面 ---
-GUIDE_CONTENT = """
-<div class="max-w">
-<div class="top-bar"><a href="/" class="btn-sm">← ホームへ</a><div style="font-size:13px; font-weight:800; color:var(--muted);">アプリの使い方</div></div>
-<div class="card" style="background:linear-gradient(135deg, var(--primary), #e11d48); color:#fff; border:none; margin-bottom:12px;">
-    <div style="font-size:20px; font-weight:900; margin-bottom:4px;">🍽️ EAT MAP ガイド</div>
-    <div style="font-size:12px; opacity:.95; line-height:1.5;">お店探し・飲み会の幹事・毎日のご飯選びを爆速＆快適にするオールインワンアプリです！</div>
-</div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--primary);">🔍 1. 究極のお店マップ探索</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>スワイプ連動UI</b>：下のカードをスワイプすると地図が自動で動きます。</li><li><b>アプリ内ルート案内</b>：カードのルート案内を押すと、地図上に青い道順が直接引かれます！</li><li><b>このエリアで再検索</b>：地図を動かして「再検索」を押すだけで周辺の店を再表示。</li><li><b>5分圏内円＆現在地追従</b>：歩きながらでも迷わずお店にたどり着けます。</li></ul></div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--blue);">💬 2. 爆速AIコンシェルジュ</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>待ち時間なし</b>：質問するだけでおすすめジャンルやお店の選び方を即答。</li><li><b>検索直結</b>：AIの返答からそのまま地図へ直行！</li></ul></div>
-<div class="card"><h3 style="font-size:14px; font-weight:900; margin:0 0 8px 0; color:var(--purple);">🧮 3. おでかけ・幹事便利ツール</h3><ul style="margin:0; padding-left:18px; font-size:12px; font-weight:700; line-height:1.7;"><li><b>⏰ 終電見張りアラーム</b>：終電時刻をセットすると30分前・15分前に通知＆振動。</li><li><b>⏱️ ダブル退席タイマー</b>：ラストオーダーと退席時間を同時にカウントダウン。</li><li><b>💸 傾斜割り勘計算</b>：飲む人・飲まない人の傾斜や端数丸めに対応。</li></ul></div>
-<a href="/" class="btn-block btn-primary" style="margin-top:14px;">さっそく使ってみる！</a>
-</div>
-"""
-
 # ================= 5. バックエンドAPI & ルーティング =================
 
 def fetch_shops(keyword="", area="", lat=None, lng=None, smoking=False, private_room=False, free_drink=False, midnight=False, pref_fish=False, pref_meat=False, pref_spicy=False):
@@ -914,6 +998,7 @@ def fetch_shops(keyword="", area="", lat=None, lng=None, smoking=False, private_
                     "name": s.get("name", "店舗名不明"), "genre": (s.get("genre") or {}).get("name", "グルメ"),
                     "address": s.get("address", ""), "budget": b_name, "min_budget": min_b,
                     "lat": s.get("lat"), "lng": s.get("lng"), "tel": s.get("tel", "0000000000"),
+                    "open": s.get("open", ""), "access": s.get("access", ""),
                     "has_private": has_pr, "smoking_info": sm_info, "has_free_drink": has_fd,
                     "url": (s.get("urls") or {}).get("pc", "#"), "photo": ((s.get("photo") or {}).get("pc") or {}).get("l", "")
                 })
@@ -933,13 +1018,7 @@ def guide(): return render_page(GUIDE_CONTENT)
 def search():
     k = html.escape(request.args.get('keyword', '')[:40])
     a = html.escape(request.args.get('area', '')[:40])
-    smoking = (request.args.get('smoking') == '1')
-    private_room = (request.args.get('private_room') == '1')
-    free_drink = (request.args.get('free_drink') == '1')
-    midnight = (request.args.get('midnight') == '1')
-    pref_fish = (request.args.get('pref_fish') == '1')
-    pref_meat = (request.args.get('pref_meat') == '1')
-    pref_spicy = (request.args.get('pref_spicy') == '1')
+    smoking, private_room, free_drink, midnight, pref_fish, pref_meat, pref_spicy = [(request.args.get(x) == '1') for x in ['smoking','private_room','free_drink','midnight','pref_fish','pref_meat','pref_spicy']]
     try:
         lat_val = float(request.args.get('lat')) if request.args.get('lat') else None
         lng_val = float(request.args.get('lng')) if request.args.get('lng') else None
@@ -994,11 +1073,7 @@ def api_chat():
 
 @app.route('/manifest.json')
 def manifest():
-    return jsonify({
-        "name": "EAT MAP", "short_name": "EAT MAP", "start_url": "/", "display": "standalone",
-        "background_color": "#0f172a", "theme_color": "#ff5252",
-        "icons": [{"src": "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>", "sizes": "192x192", "type": "image/svg+xml"}]
-    })
+    return jsonify({"name": "EAT MAP", "short_name": "EAT MAP", "start_url": "/", "display": "standalone", "background_color": "#0f172a", "theme_color": "#ff5252", "icons": [{"src": "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍽️</text></svg>", "sizes": "192x192", "type": "image/svg+xml"}]})
 
 @app.route('/sw.js')
 def sw(): return Response("self.addEventListener('fetch', e => {});", mimetype="application/javascript")
