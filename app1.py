@@ -1,5 +1,5 @@
 # ==============================================================================
-# 【EAT MAP】Google Places直接検索 × 幹事フル装備 × 視認性強化お気に入り
+# 【EAT MAP】Google Places × 強化版タイマー × 可変ルーレット × 毎回更新ガチャ
 # ==============================================================================
 import os, urllib.request, urllib.parse, json, re, time, gzip, html, base64, socket, math, concurrent.futures
 from collections import defaultdict
@@ -26,7 +26,7 @@ if not GEMINI_API_KEY:
                 GEMINI_API_KEY = v.strip()
                 break
 if not GEMINI_API_KEY:
-    GEMINI_API_KEY = base4.b64decode("QVEuQWI4Uk42S1EzbGtWSjctSVowSWFfNjEtdUpQaF9zT0tFUzFqNjV3WGg2bVZqc1o1bnc=").decode('utf-8')
+    GEMINI_API_KEY = base64.b64decode("QVEuQWI4Uk42S1EzbGtWSjctSVowSWFfNjEtdUpQaF9zT0tFUzFqNjV3WGg2bVZqc1o1bnc=").decode('utf-8')
 
 # ================= 1. 安全対策・キャッシュ・セキュリティ =================
 IP_LOG = defaultdict(list)
@@ -72,9 +72,8 @@ def apply_security_and_compress(res):
             res.headers['Content-Length'] = str(len(c))
     return res
 
-# ================= 2. Google Places 直接検索 & 各種APIエンジン =================
+# ================= 2. 検索エンジン（Google Places ＋ HotPepper ＋ Yahoo!） =================
 
-# Google Places API (New) による店舗直接一括検索（Googleマップの実データを直接取得）
 def fetch_google_places_direct(query_str, lat=None, lng=None):
     if not GOOGLE_PLACES_API_KEY or not query_str: return []
     cache_key = f"g_direct_{query_str}_{lat}_{lng}"
@@ -87,7 +86,7 @@ def fetch_google_places_direct(query_str, lat=None, lng=None):
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.nationalPhoneNumber,places.regularOpeningHours,places.primaryTypeDisplayName"
     }
     body_data = {
-        "textQuery": f"{query_str} 飲食店 レストラン グルメ".strip(),
+        "textQuery": f"{query_str} 飲食店 グルメ レストラン".strip(),
         "maxResultCount": 20,
         "languageCode": "ja"
     }
@@ -129,7 +128,6 @@ def fetch_google_places_direct(query_str, lat=None, lng=None):
         return g_shops
     except Exception: return []
 
-# Yahoo!ローカルサーチ
 def fetch_yahoo_local_task(keyword, lat, lng):
     if not YAHOO_CLIENT_ID: return []
     params = {"appid": YAHOO_CLIENT_ID, "output": "json", "results": 50, "gc": "01"}
@@ -169,7 +167,6 @@ def fetch_yahoo_local_task(keyword, lat, lng):
             return y_shops
     except Exception: return []
 
-# ホットペッパー API
 def fetch_hotpepper_task(keyword, area, lat, lng, smoking, private_room, free_drink, midnight, start_idx=1):
     if not HOTPEPPER_API_KEY: return []
     params = {"key": HOTPEPPER_API_KEY, "count": 100, "start": start_idx, "format": "json"}
@@ -218,7 +215,6 @@ def fetch_hotpepper_task(keyword, area, lat, lng, smoking, private_room, free_dr
     except Exception: pass
     return results
 
-# 楽天レシピAPI
 def fetch_rakuten_recipes(keyword):
     if not RAKUTEN_APP_ID or not keyword: return []
     clean_kw = re.sub(r'[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FA\u4E00-\u9FFF]', ' ', keyword).strip()
@@ -243,7 +239,6 @@ def fetch_rakuten_recipes(keyword):
             return recipes
     except Exception: return []
 
-# Google Maps × HotPepper × Yahoo! 完全ハイブリッド大量検索
 def fetch_all_shops_massive(keyword="", area="", lat=None, lng=None, smoking=False, private_room=False, free_drink=False, midnight=False):
     cache_key = f"{keyword}_{area}_{lat}_{lng}_{smoking}_{private_room}_{free_drink}_{midnight}"
     if cache_key in SEARCH_CACHE: return SEARCH_CACHE[cache_key]
@@ -262,7 +257,6 @@ def fetch_all_shops_massive(keyword="", area="", lat=None, lng=None, smoking=Fal
         hp2 = f_hp2.result()
         yh  = f_yh.result()
 
-    # Googleの正確な実店舗を先頭にマージ
     all_raw = goog_list + hp1 + hp2 + yh
     results = []
     existing_names = set()
@@ -344,15 +338,25 @@ LAYOUT_HTML = """<!DOCTYPE html>
         .btn-line { background: var(--line); color: #fff; border:none; }
         .btn-sub { background: var(--tag); color: var(--text); border: 1.5px solid var(--border); }
         .input-group { margin-bottom: 10px; }
-        .input-group input, .input-group select { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 14px; background: var(--input); color: var(--text); outline: none; font-weight: 700; }
+        .input-group input, .input-group select, .input-group textarea { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 14px; background: var(--input); color: var(--text); outline: none; font-weight: 700; font-family: inherit; }
         .badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 800; padding: 3px 6px; border-radius: 6px; background: var(--tag); color: var(--text); }
         .badge-primary { background: var(--primary-light); color: var(--primary); }
         .filter-chip { background: var(--tag); border: 1.5px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; font-weight: 800; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; user-select: none; }
         .filter-chip.active { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
         
-        /* お気に入りトグルボタン（視認性強化スタイル） */
         .fav-toggle-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 10px; font-size: 11px; font-weight: 900; border: 1.5px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; transition: all .2s; }
         .fav-toggle-btn.is-active { background: #fee2e2; border-color: #ef4444; color: #ef4444; }
+
+        /* 高視認性マップ & ピン */
+        .custom-map-pin { position: relative; width: 32px; height: 38px; }
+        .pin-body { width: 32px; height: 32px; background: var(--primary); border: 2.5px solid #fff; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); box-shadow: 0 3px 8px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; }
+        .pin-num { transform: rotate(45deg); color: #fff; font-weight: 900; font-size: 12px; }
+        
+        /* 現在地パルスアニメーション */
+        .gps-pulse-marker { position: relative; width: 22px; height: 22px; }
+        .gps-dot { width: 16px; height: 16px; background: #2563eb; border: 2.5px solid #fff; border-radius: 50%; box-shadow: 0 0 5px rgba(0,0,0,0.4); position: absolute; top: 3px; left: 3px; z-index: 2; }
+        .gps-ring { width: 22px; height: 22px; background: rgba(37,99,235,0.4); border-radius: 50%; position: absolute; top: 0; left: 0; animation: pulseRadar 1.8s infinite ease-out; }
+        @keyframes pulseRadar { 0% { transform: scale(0.6); opacity: 1; } 100% { transform: scale(2.4); opacity: 0; } }
 
         .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--card); border-top: 1.5px solid var(--border); display: flex; justify-content: space-around; padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); z-index: 9000; }
         .bottom-nav a { color: var(--muted); text-decoration: none; font-size: 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-weight: 800; width: 20%; }
@@ -368,7 +372,7 @@ LAYOUT_HTML = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <div id="loading-overlay"><div class="spinner"></div><div id="loading-msg" style="color:#fff; font-size:13.5px; font-weight:800;">Googleマップ基準で店舗を検索中...</div></div>
+    <div id="loading-overlay"><div class="spinner"></div><div id="loading-msg" style="color:#fff; font-size:13.5px; font-weight:800;">店舗データを検索中...</div></div>
     {{ content | safe }}
     <div class="bottom-nav">
         <a href="/" id="nav-home"><span class="icon">🔍</span><span>探す</span></a>
@@ -458,7 +462,7 @@ HOME_CONTENT = """
 </script>
 """
 
-# --- 検索結果・地図画面（お気に入り視認性強化・電話直通特化） ---
+# --- 検索結果・地図画面 ---
 RESULT_CONTENT = """
 <div id="view-list" class="max-w">
     <div class="top-bar">
@@ -487,8 +491,11 @@ RESULT_CONTENT = """
     {% endif %}
 
     <div style="position:relative; margin-bottom:12px;">
-        <div id="map-preview" style="height:230px; width:100%; border-radius:14px; border:1.5px solid var(--border); box-shadow:var(--shadow);"></div>
-        <button onclick="recenterToUser()" style="position:absolute; bottom:10px; right:10px; z-index:1000; background:var(--card); border:1.5px solid var(--border); border-radius:10px; padding:6px 10px; font-size:11px; font-weight:900; cursor:pointer;">🎯 現在地へ</button>
+        <div id="map-preview" style="height:250px; width:100%; border-radius:14px; border:1.5px solid var(--border); box-shadow:var(--shadow);"></div>
+        <div style="position:absolute; bottom:10px; right:10px; z-index:1000; display:flex; gap:6px;">
+            <button onclick="zoomToAll()" style="background:var(--card); border:1.5px solid var(--border); border-radius:8px; padding:6px 9px; font-size:11px; font-weight:900; cursor:pointer;">🗺️ 全体</button>
+            <button onclick="recenterToUser()" style="background:var(--card); border:1.5px solid var(--border); border-radius:8px; padding:6px 9px; font-size:11px; font-weight:900; cursor:pointer;">🎯 現在地</button>
+        </div>
     </div>
 
     <div id="shops-list">
@@ -503,7 +510,6 @@ RESULT_CONTENT = """
                     <span style="background:var(--primary); color:#fff; font-size:11px; padding:2px 6px; border-radius:6px; margin-right:4px;">{{ loop.index }}</span>{{ s.name }}
                 </h3>
                 <div style="display:flex; gap:4px; align-items:center;">
-                    <!-- 視認性抜群のお気に入りトグルボタン -->
                     <button class="fav-toggle-btn" id="fav-btn-{{ loop.index0 }}" onclick='toggleFavByIndex({{ loop.index0 }})'>
                         <span class="fav-icon">🤍</span><span class="fav-text">保存</span>
                     </button>
@@ -541,7 +547,7 @@ RESULT_CONTENT = """
     </div>
 </div>
 
-<!-- アプリ内完結：店舗詳細シート（お気に入りトグル & 電話直通） -->
+<!-- 店舗詳細シート -->
 <div id="detail-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:flex-end; align-items:center; padding:14px; flex-direction:column;">
     <div class="card" style="width:100%; max-width:440px; max-height:88vh; display:flex; flex-direction:column; margin:0; background:var(--card); padding:16px;">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
@@ -553,7 +559,10 @@ RESULT_CONTENT = """
             <img id="dt-photo" src="" style="width:100%; height:190px; object-fit:cover; border-radius:12px; margin-bottom:10px; background:#222; display:none;">
             <div id="dt-catch" style="font-size:12px; font-weight:800; color:var(--primary); margin-bottom:10px; line-height:1.5;"></div>
             
-            <a href="#" id="dt-top-tel" class="btn-block btn-green" style="justify-content:center; font-size:15px; margin-bottom:10px;">📞 店舗に電話予約する</a>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:10px;">
+                <a href="#" id="dt-top-tel" class="btn-block btn-green" style="margin:0; justify-content:center; font-size:13px;">📞 電話予約</a>
+                <button id="dt-invite-btn" class="btn-block btn-purple" style="margin:0; justify-content:center; font-size:13px;" onclick="goToInviteFromDetail()">📨 案内文を作る</button>
+            </div>
 
             <div style="font-size:12px; line-height:1.8; background:var(--tag); padding:14px; border-radius:14px; margin-bottom:12px;">
                 <div style="margin-bottom:6px;"><b>⭐ Google星評価:</b> <span id="dt-google" style="color:#d97706; font-weight:900;">--</span></div>
@@ -586,7 +595,7 @@ RESULT_CONTENT = """
         const defaultLat = (shops.length>0 && shops[0].lat) ? shops[0].lat : 34.8290;
         const defaultLng = (shops.length>0 && shops[0].lng) ? shops[0].lng : 134.6900;
 
-        map = L.map('map-preview', {zoomControl:false}).setView([defaultLat, defaultLng], 14);
+        map = L.map('map-preview', {zoomControl:true}).setView([defaultLat, defaultLng], 14);
         L.tileLayer('https://tile.openstreetmap.jp/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '&copy; OpenStreetMap contributors'
@@ -602,19 +611,53 @@ RESULT_CONTENT = """
 
                 const curIcon = L.divIcon({
                     className:'',
-                    html:`<div style="background:#3b82f6; width:18px; height:18px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 0 6px rgba(59,130,246,0.35);"></div>`,
-                    iconSize:[18,18], iconAnchor:[9,9]
+                    html:`<div class="gps-pulse-marker"><div class="gps-dot"></div><div class="gps-ring"></div></div>`,
+                    iconSize:[22,22], iconAnchor:[11,11]
                 });
                 L.marker([uLat, uLng], {icon: curIcon, zIndexOffset:1000}).addTo(map);
-                map.setView([uLat, uLng], 15);
+                map.flyTo([uLat, uLng], 15, {duration: 1.2});
             }, () => {
-                const bounds = shops.filter(s=>s.lat&&s.lng).map(s=>[s.lat, s.lng]);
-                if(bounds.length > 0) map.fitBounds(bounds, {padding:[15,15]});
+                zoomToAll();
             }, {timeout:5000});
         }
     });
 
-    // お気に入り状態の画面全反映ロジック
+    function renderMarkers(filteredIndices = null) {
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+        shops.forEach((s, i) => {
+            if(filteredIndices && !filteredIndices.has(i)) return;
+            if(s.lat && s.lng){
+                const pinHtml = `
+                    <div class="custom-map-pin">
+                        <div class="pin-body"><span class="pin-num">${i+1}</span></div>
+                    </div>
+                `;
+                const icon = L.divIcon({
+                    className:'',
+                    html: pinHtml,
+                    iconSize:[32,38], iconAnchor:[16,38], popupAnchor:[0,-34]
+                });
+                const m = L.marker([s.lat, s.lng], {icon}).addTo(map);
+                const popupContent = `
+                    <div style="font-size:12px; font-weight:800; min-width:160px;">
+                        <div style="color:var(--primary); margin-bottom:2px;">#${i+1} ${s.name}</div>
+                        <div style="font-size:10px; color:#64748b; margin-bottom:6px;">⭐ ${s.google_rating ? s.google_rating : '評価なし'} / 💰 ${s.budget}</div>
+                        <button onclick="openShopDetailByIndex(${i})" style="width:100%; padding:6px; background:var(--primary); color:#fff; border:none; border-radius:6px; font-weight:800; font-size:11px; cursor:pointer;">店舗シートを開く</button>
+                    </div>
+                `;
+                m.bindPopup(popupContent);
+                m.on('click', () => { map.panTo([s.lat, s.lng]); });
+                markers.push(m);
+            }
+        });
+    }
+
+    function zoomToAll() {
+        const bounds = shops.filter(s=>s.lat&&s.lng).map(s=>[s.lat, s.lng]);
+        if(bounds.length > 0) map.fitBounds(bounds, {padding:[20,20]});
+    }
+
     function syncFavButtons() {
         const favs = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
         const favNames = new Set(favs.map(f => f.name));
@@ -634,7 +677,6 @@ RESULT_CONTENT = """
             }
         });
 
-        // モーダル内のボタン更新
         if(currentDetailIdx !== null) {
             const modalBtn = document.getElementById('dt-modal-fav-btn');
             const isFav = favNames.has(shops[currentDetailIdx].name);
@@ -664,27 +706,7 @@ RESULT_CONTENT = """
     }
 
     function toggleCurrentModalFav() {
-        if(currentDetailIdx !== null) {
-            toggleFavByIndex(currentDetailIdx);
-        }
-    }
-
-    function renderMarkers(filteredIndices = null) {
-        markers.forEach(m => map.removeLayer(m));
-        markers = [];
-        shops.forEach((s, i) => {
-            if(filteredIndices && !filteredIndices.has(i)) return;
-            if(s.lat && s.lng){
-                const icon = L.divIcon({
-                    className:'',
-                    html:`<div style="background:var(--primary); color:#fff; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.3); font-size:11px; font-weight:900; display:flex; align-items:center; justify-content:center; width:24px; height:24px;">${i+1}</div>`,
-                    iconSize:[24,24], iconAnchor:[12,12]
-                });
-                const m = L.marker([s.lat, s.lng], {icon}).addTo(map);
-                m.on('click', () => openShopDetailByIndex(i));
-                markers.push(m);
-            }
-        });
+        if(currentDetailIdx !== null) toggleFavByIndex(currentDetailIdx);
     }
 
     function filterShops(val) {
@@ -723,11 +745,11 @@ RESULT_CONTENT = """
 
     function recenterToUser() {
         if(uLat && uLng) {
-            map.setView([uLat, uLng], 16);
+            map.flyTo([uLat, uLng], 16, {duration: 0.8});
         } else if(navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(pos => {
                 uLat = pos.coords.latitude; uLng = pos.coords.longitude;
-                map.setView([uLat, uLng], 16);
+                map.flyTo([uLat, uLng], 16, {duration: 0.8});
             });
         }
     }
@@ -776,13 +798,27 @@ RESULT_CONTENT = """
         const shareText = `【EAT MAP】ここはどう？\\n店名: ${s.name}\\nジャンル: ${s.genre}\\n住所: ${s.address}\\n電話: ${s.tel}`;
         shareToLine(shareText);
     }
+
+    function goToInviteFromDetail() {
+        if(currentDetailIdx === null) return;
+        const s = shops[currentDetailIdx];
+        sessionStorage.setItem('eatmap_invite_preset', JSON.stringify({
+            shop: s.name,
+            place: s.address,
+            budget: s.budget
+        }));
+        window.location.href = '/tools#invite-section';
+    }
 </script>
 """
 
-# --- グルメ記録画面 ---
+# --- グルメ記録画面（毎回更新ガチャ） ---
 FAVORITES_CONTENT = """
 <div class="max-w">
-<div class="top-bar"><div class="brand">📋 グルメ記録</div><button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 ガチャ</button></div>
+<div class="top-bar">
+    <div class="brand">📋 グルメ記録</div>
+    <button class="btn-sm btn-yellow" onclick="pickRandomFav()">🎲 ガチャ (引く度に更新)</button>
+</div>
 <div class="card" style="background:linear-gradient(135deg, #6366f1, #8b5cf6); color:#fff; border:none; margin-bottom:12px;">
     <div style="display:flex; justify-content:space-between; align-items:center;">
         <div><div style="font-size:11px; font-weight:800; opacity:.9;">🏆 現在のグルメ称号</div><div style="font-size:18px; font-weight:900;" id="user-title">Lv.1 ひよっこ探検家 🐣</div></div>
@@ -793,9 +829,30 @@ FAVORITES_CONTENT = """
 </div>
 <div id="fav-list" style="display:flex; flex-direction:column; gap:10px;"></div>
 </div>
+
+<!-- ガチャ当選ポップアップ（毎回更新） -->
+<div id="gacha-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); z-index:99999; justify-content:center; align-items:center; padding:16px;">
+    <div class="card" style="width:100%; max-width:380px; text-align:center; padding:20px; border-color:var(--yellow);">
+        <div style="font-size:32px; margin-bottom:6px;">🎉</div>
+        <div style="font-size:12px; font-weight:800; color:var(--yellow);">今日行くべきお店が決まりました！</div>
+        <div style="font-size:18px; font-weight:900; margin:8px 0;" id="gacha-name">--</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:12px;" id="gacha-addr">--</div>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
+            <a href="#" id="gacha-search-btn" class="btn-block btn-green" style="margin:0; justify-content:center; font-size:12px;">🔍 お店を探す</a>
+            <button id="gacha-line-btn" class="btn-block btn-line" style="margin:0; justify-content:center; font-size:12px;">💬 LINE提案</button>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+            <button onclick="pickRandomFav()" class="btn-block btn-yellow" style="margin:0; min-height:38px; font-size:12px;">🔄 もう一度引く</button>
+            <button onclick="document.getElementById('gacha-modal').style.display='none'" class="btn-block btn-sub" style="margin:0; min-height:38px; font-size:12px;">閉じる</button>
+        </div>
+    </div>
+</div>
+
 <script>
     const titles = [{ lv:1, count:0, title:"Lv.1 ひよっこ探検家 🐣", icon:"🐣" },{ lv:2, count:2, title:"Lv.2 街角の食べ歩き隊 🚶", icon:"🍙" },{ lv:3, count:5, title:"Lv.3 こだわりグルメ通 🍴", icon:"🍝" },{ lv:4, count:10, title:"Lv.4 地域の名店ハンター 🏅", icon:"🥩" },{ lv:5, count:20, title:"Lv.5 伝説の美食王 👑", icon:"👑" }];
-    
+    let lastGachaShopName = "";
+
     function renderFavs(){
         const list = document.getElementById('fav-list');
         const f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
@@ -834,17 +891,52 @@ FAVORITES_CONTENT = """
                 </div>
                 <div style="display:flex; gap:6px; margin-top:8px;">
                     <button class="btn-sm ${s.visited?'btn-green':'btn-sub'}" style="flex:1; padding:6px 0; font-size:10.5px; border:none;" onclick="toggleV(${i})">${s.visited?'🏁 行った！':'🚩 行ってみたい'}</button>
+                    <a href="/search?keyword=${encodeURIComponent(s.name)}" class="btn-sm btn-sub" style="padding:6px 10px; font-size:10.5px;">🔍 検索</a>
                     <button class="btn-sm btn-line" style="padding:6px 10px; font-size:10.5px; border:none;" onclick="shareFavLine(${i})">LINE共有</button>
                 </div>
             </div>`;
         }).join('');
     }
+
+    // 毎回重複せず新しい店舗を引くガチャ
+    function pickRandomFav(){
+        const f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
+        let picked = null;
+
+        if(f.length > 0) {
+            let pool = f.filter(x => x.name !== lastGachaShopName);
+            if(pool.length === 0) pool = f;
+            picked = pool[Math.floor(Math.random() * pool.length)];
+        } else {
+            // お気に入り0件時は人気ジャンル・おすすめ候補から毎回ランダム抽出
+            const fallbackShops = [
+                { name: "炭火焼鳥と旬菜 個室居酒屋", address: "駅前商店街・徒歩2分", genre: "居酒屋・焼鳥" },
+                { name: "黒毛和牛 特選焼肉ダイニング", address: "本通り沿い・駅北口すぐ", genre: "焼肉・ホルモン" },
+                { name: "自家製生パスタ＆薪窯ピッツァ", address: "みゆき通り・隠れ家ビル2F", genre: "イタリアン・ワイン" },
+                { name: "鮮魚と地酒の個室和食処", address: "駅前南口・ロータリー前", genre: "海鮮・和食" }
+            ];
+            let pool = fallbackShops.filter(x => x.name !== lastGachaShopName);
+            if(pool.length === 0) pool = fallbackShops;
+            picked = pool[Math.floor(Math.random() * pool.length)];
+        }
+
+        lastGachaShopName = picked.name;
+        doVibrate([50, 50, 100]);
+        
+        document.getElementById('gacha-name').innerText = picked.name;
+        document.getElementById('gacha-addr').innerText = `📍 ${picked.address || picked.genre}`;
+        document.getElementById('gacha-search-btn').href = `/search?keyword=${encodeURIComponent(picked.name)}`;
+        document.getElementById('gacha-line-btn').onclick = () => {
+            shareToLine(`【今日の提案店舗！】ガチャで選ばれたよ！\\n店名: ${picked.name}\\nジャンル: ${picked.genre}\\n場所: ${picked.address}\\n一緒に行こう！`);
+        };
+        document.getElementById('gacha-modal').style.display = 'flex';
+    }
+
     function setRating(i, r){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].rating = (f[i].rating === r) ? 0 : r; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
     function saveMemo(i, val){ let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].memo = val.trim(); localStorage.setItem('eatmap_favs', JSON.stringify(f)); }
     function toggleV(i){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].visited = !f[i].visited; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
     function setTag(i, t){ doVibrate(20); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f[i].tag = (f[i].tag === t) ? '' : t; localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); }
     function delFav(i){ if(confirm("リストから削除しますか？")){ doVibrate(30); let f = JSON.parse(localStorage.getItem('eatmap_favs')); f.splice(i,1); localStorage.setItem('eatmap_favs', JSON.stringify(f)); renderFavs(); } }
-    function pickRandomFav(){ const f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]'); if(f.length===0) return showAppAlert("ご案内", "保存したお店がありません！"); doVibrate([50, 50, 100]); const p = f[Math.floor(Math.random() * f.length)]; showAppAlert("🎲 今日のオススメ！", `【${p.name}】\\nジャンル: ${p.genre}\\n住所: ${p.address}`); }
     function shareFavLine(i){
         const f = JSON.parse(localStorage.getItem('eatmap_favs')||'[]');
         const s = f[i];
@@ -854,7 +946,7 @@ FAVORITES_CONTENT = """
 </script>
 """
 
-# --- 抽選・カラー別ルーレット画面 ---
+# --- 抽選画面（項目増減・毎回更新・店舗直接ジャンプ） ---
 GAME_CONTENT = """
 <div class="max-w">
 <div class="top-bar"><div class="brand">🎯 抽選・診断</div></div>
@@ -868,43 +960,43 @@ GAME_CONTENT = """
     <button class="btn-block btn-primary" id="spin-btn" style="font-size:16px; min-height:50px;" onclick="spinWheel()">🎯 ルーレットを回す！</button>
 </div>
 
+<!-- 当選結果＆店舗直接ジャンプ -->
 <div class="card" id="result-box" style="display:none; text-align:center; background:var(--primary-light); border-color:var(--primary); margin-bottom:12px;">
     <div style="font-size:12px; font-weight:800; color:var(--muted);">当選結果</div>
     <div style="font-size:26px; font-weight:900; color:var(--primary); margin:8px 0;" id="res-val">--</div>
     
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px;">
-        <a href="#" id="res-search-btn" class="btn-block btn-green" style="margin:0; justify-content:center;">🔍 お店を探す</a>
-        <button class="btn-block btn-line" id="res-line-btn" style="margin:0; justify-content:center;" onclick="shareResultLine()">💬 結果をLINE共有</button>
+        <a href="#" id="res-search-btn" class="btn-block btn-green" style="margin:0; justify-content:center;">🔍 このジャンルを探す</a>
+        <button class="btn-block btn-line" id="res-line-btn" style="margin:0; justify-content:center;" onclick="shareResultLine()">💬 LINE共有</button>
     </div>
 </div>
 
+<!-- 項目の自由な追加・削除UI -->
 <div class="card">
-    <div style="font-size:13px; font-weight:900; color:var(--text); margin-bottom:4px;">🎨 ルーレット項目のカラー別編集</div>
-    <div style="font-size:11px; color:var(--muted); margin-bottom:12px;">それぞれの色に対応するジャンルや店名を自由に変更できます。</div>
-    <div id="color-slots" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;"></div>
-    <button class="btn-block btn-sub" style="margin-top:10px;" onclick="saveCustomWheel()">盤面を保存して更新</button>
-</div>
-
-<div class="card">
-    <div style="font-size:13px; font-weight:900; color:var(--blue); margin-bottom:6px;">🍶 今夜飲むべきお酒診断 (さけのわ連携)</div>
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-        <button class="btn-sm btn-sub" onclick="showDrinkPick('華やかフルーティー（獺祭・鳳凰美田系）')">🌸 フルーティー系</button>
-        <button class="btn-sm btn-sub" onclick="showDrinkPick('すっきり超辛口（久保田・八海山系）')">❄️ すっきり辛口</button>
-        <button class="btn-sm btn-sub" onclick="showDrinkPick('ジントニック・モスコミュール')">🍸 定番カクテル</button>
-        <button class="btn-sm btn-sub" onclick="showDrinkPick('芳醇ハイボール・山崎白州系')">🥃 芳醇ウイスキー</button>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <div style="font-size:13px; font-weight:900; color:var(--text);">🎨 ルーレット項目のカスタマイズ</div>
+        <button class="btn-sm btn-sub" onclick="addWheelSlot()">＋ 項目を追加</button>
     </div>
+    <div style="font-size:11px; color:var(--muted); margin-bottom:10px;">自由に項目を増やしたり削ったりできます（2個〜最大16個）。</div>
+    
+    <div id="wheel-items-list" style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;"></div>
+    <button class="btn-block btn-sub" onclick="saveCustomWheel()">盤面を保存して更新</button>
 </div>
 </div>
 <script>
-    const wheelColors = [
-        { name: "レッド", code: "#ffc9c9", border: "#ff8787" },
-        { name: "オレンジ", code: "#ffe3a8", border: "#ffa94d" },
-        { name: "イエロー", code: "#fff3bf", border: "#ffe066" },
-        { name: "グリーン", code: "#bbf7d0", border: "#69db7c" },
-        { name: "スカイ", code: "#c5f6fa", border: "#3bc9db" },
-        { name: "ブルー", code: "#d0ebff", border: "#74c0fc" },
-        { name: "パープル", code: "#dbe4ff", border: "#91a7ff" },
-        { name: "ピンク", code: "#f3d9fa", border: "#da77f2" }
+    const colorPalette = [
+        { code: "#ffc9c9", border: "#ff8787" },
+        { code: "#ffe3a8", border: "#ffa94d" },
+        { code: "#fff3bf", border: "#ffe066" },
+        { code: "#bbf7d0", border: "#69db7c" },
+        { code: "#c5f6fa", border: "#3bc9db" },
+        { code: "#d0ebff", border: "#74c0fc" },
+        { code: "#dbe4ff", border: "#91a7ff" },
+        { code: "#f3d9fa", border: "#da77f2" },
+        { code: "#fed7aa", border: "#f97316" },
+        { code: "#a7f3d0", border: "#10b981" },
+        { code: "#e9d5ff", border: "#a855f7" },
+        { code: "#fbcfe8", border: "#ec4899" }
     ];
 
     let defaultItems = ["焼肉 🥩","居酒屋 🍺","カフェ ☕","ラーメン 🍜","海鮮 🐟","カレー 🍛","イタリアン 🍕","中華 🥟"];
@@ -912,13 +1004,40 @@ GAME_CONTENT = """
     let curDeg = 0, isSpinning = false;
     let lastWinner = "";
 
-    function renderColorSlots() {
-        const c = document.getElementById('color-slots');
-        c.innerHTML = wheelColors.map((col, i) => `
-            <div style="display:flex; align-items:center; gap:6px; background:var(--tag); padding:6px 8px; border-radius:10px; border-left:6px solid ${col.border};">
-                <input type="text" id="slot-${i}" value="${wheelItems[i] || ''}" style="width:100%; border:none; background:transparent; font-size:12px; font-weight:800; color:var(--text); outline:none;">
+    function renderWheelInputs() {
+        const c = document.getElementById('wheel-items-list');
+        c.innerHTML = wheelItems.map((val, i) => {
+            const col = colorPalette[i % colorPalette.length];
+            return `
+            <div style="display:flex; align-items:center; gap:6px; background:var(--tag); padding:6px 10px; border-radius:10px; border-left:6px solid ${col.border};">
+                <input type="text" id="slot-input-${i}" value="${val}" style="flex:1; border:none; background:transparent; font-size:13px; font-weight:800; color:var(--text); outline:none;">
+                <button class="btn-icon" style="width:24px; height:24px; font-size:11px; border:none; background:none; color:var(--muted);" onclick="removeWheelSlot(${i})">✕</button>
             </div>
-        `).join('');
+            `;
+        }).join('');
+    }
+
+    function addWheelSlot() {
+        if(wheelItems.length >= 16) return showAppAlert("ご案内", "項目は最大16個までです。");
+        syncCurrentInputs();
+        wheelItems.push("新規項目 " + (wheelItems.length + 1));
+        renderWheelInputs();
+        drawCanvas();
+    }
+
+    function removeWheelSlot(idx) {
+        if(wheelItems.length <= 2) return showAppAlert("ご案内", "最低2項目は必要です。");
+        syncCurrentInputs();
+        wheelItems.splice(idx, 1);
+        renderWheelInputs();
+        drawCanvas();
+    }
+
+    function syncCurrentInputs() {
+        for(let i=0; i<wheelItems.length; i++){
+            const inp = document.getElementById(`slot-input-${i}`);
+            if(inp) wheelItems[i] = inp.value.trim() || `項目 ${i+1}`;
+        }
     }
 
     function drawCanvas() { 
@@ -926,7 +1045,9 @@ GAME_CONTENT = """
         const ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, 280, 280); 
         const num = wheelItems.length, arc = (2 * Math.PI) / num; 
         for(let i=0; i<num; i++){ 
-            const a = i * arc; ctx.fillStyle = wheelColors[i % wheelColors.length].code; ctx.beginPath(); 
+            const a = i * arc; 
+            const col = colorPalette[i % colorPalette.length];
+            ctx.fillStyle = col.code; ctx.beginPath(); 
             ctx.arc(140, 140, 136, a, a + arc, false); ctx.arc(140, 140, 0, a + arc, a, true); ctx.fill(); 
             ctx.save(); ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 2; ctx.stroke(); 
             ctx.fillStyle = "#2d3142"; ctx.font = "bold 12px -apple-system, sans-serif"; 
@@ -955,51 +1076,79 @@ GAME_CONTENT = """
     }
 
     function saveCustomWheel() {
-        const newItems = [];
-        for(let i=0; i<wheelColors.length; i++){
-            const val = document.getElementById(`slot-${i}`).value.trim();
-            newItems.push(val || `項目 ${i+1}`);
-        }
-        wheelItems = newItems;
+        syncCurrentInputs();
         localStorage.setItem('eatmap_wheel_items', JSON.stringify(wheelItems));
         drawCanvas();
-        showAppAlert("設定完了", "ルーレットの各カラー項目を更新しました！");
+        showAppAlert("設定完了", "ルーレットの項目を保存・更新しました！");
     }
 
     function shareResultLine() {
         if(!lastWinner) return;
-        shareToLine(`【EAT MAP】今日のランチ・ディナー抽選結果！\\n🎉 当選ジャンル: ${lastWinner}\\nこれで決定！行こう！🍽️`);
-    }
-
-    function showDrinkPick(msg){
-        showAppAlert("🍶 おすすめのお酒", `【${msg}】\\nお店で注文してみてください！✨`);
+        shareToLine(`【EAT MAP】今日のランチ・ディナー抽選結果！\\n🎉 当選ジャンル: ${lastWinner}\\nこれに決定！一緒に行こう！🍽️`);
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-        renderColorSlots();
+        renderWheelInputs();
         drawCanvas();
     });
 </script>
 """
 
-# --- 幹事フル装備画面（割り勘OCR・タイマー・集金・席替え） ---
+# --- 幹事ツール画面（タイマー大幅強化・案内状・割り勘・終電） ---
 TOOLS_CONTENT = """
 <div class="max-w">
 <div class="top-bar"><div class="brand">🧮 幹事お助けツール</div></div>
 
-<!-- 飲み放題・コース退席タイマー -->
-<div class="card" style="border-color:var(--yellow);">
-    <div style="font-size:12px; font-weight:800; color:var(--yellow); margin-bottom:8px;">⏳ 飲み放題・コース退席タイマー</div>
-    <div style="display:flex; gap:6px;">
-        <button class="btn-sm btn-sub" onclick="startTimer(90)">90分</button>
-        <button class="btn-sm btn-sub" onclick="startTimer(120)">120分</button>
-        <button class="btn-sm btn-sub" onclick="startTimer(150)">150分</button>
-        <button class="btn-sm btn-primary" onclick="cancelTimer()">停止</button>
+<!-- 📨 飲み会・食事会 ご案内状メーカー -->
+<div class="card" id="invite-section" style="border-color:var(--purple); background:linear-gradient(135deg, var(--card), var(--tag));">
+    <div style="font-size:13px; font-weight:900; color:var(--purple); margin-bottom:4px;">📨 飲み会・食事会 ご案内状メーカー</div>
+    <div style="font-size:11px; color:var(--muted); margin-bottom:10px;">LINEグループにそのまま貼れる案内メッセージを瞬時に作成します。</div>
+    
+    <div class="input-group"><input type="text" id="inv-title" value="親睦会・飲み会のご案内🍻" placeholder="イベント名"></div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+        <div class="input-group"><input type="text" id="inv-date" placeholder="📅 日時 (例: 10/30 19:30〜)"></div>
+        <div class="input-group"><input type="text" id="inv-budget" placeholder="💰 会費 (例: 4,000円)"></div>
     </div>
-    <div id="timer-status" style="font-size:11px; font-weight:800; color:var(--muted); margin-top:6px;">未稼働</div>
+    <div class="input-group"><input type="text" id="inv-shop" placeholder="📍 お店・集合場所 (例: 旬彩庵 姫路駅前)"></div>
+    <div class="input-group"><input type="text" id="inv-memo" value="※開始10分前に直接お店にお越しください！" placeholder="備考・注意事項"></div>
+    
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+        <button class="btn-block btn-line" style="margin:0; justify-content:center;" onclick="generateAndSendLineInvite()">💬 LINEで案内を送る</button>
+        <button class="btn-block btn-sub" style="margin:0; justify-content:center;" onclick="copyInviteText()">📋 文面をコピー</button>
+    </div>
 </div>
 
-<!-- 傾斜割り勘計算 ＆ レシートOCR -->
+<!-- ⏳ 飲み放題・コース退席タイマー（超大型デジタル表示＆直感操作） -->
+<div class="card" style="border-color:var(--yellow); text-align:center; padding:18px 14px;">
+    <div style="font-size:13px; font-weight:900; color:var(--yellow); margin-bottom:4px;">⏳ 飲み放題・コース退席タイマー</div>
+    <div style="font-size:11px; color:var(--muted); margin-bottom:12px;">終了15分前にラストオーダーのアラートを自動通知します</div>
+    
+    <!-- 大型デジタル表示 -->
+    <div id="big-timer-display" style="font-size:42px; font-weight:900; font-family:monospace; color:var(--primary); margin:6px 0 12px; letter-spacing:2px;">00:00</div>
+    <div id="timer-status-badge" style="font-size:11.5px; font-weight:800; color:var(--muted); margin-bottom:12px;">タイマー停止中</div>
+
+    <!-- コース定番時間のクイックボタン -->
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-bottom:10px;">
+        <button class="btn-sm btn-sub" style="padding:8px 0; justify-content:center;" onclick="presetTimer(60)">60分</button>
+        <button class="btn-sm btn-sub" style="padding:8px 0; justify-content:center;" onclick="presetTimer(90)">90分</button>
+        <button class="btn-sm btn-sub" style="padding:8px 0; justify-content:center;" onclick="presetTimer(120)">120分</button>
+        <button class="btn-sm btn-sub" style="padding:8px 0; justify-content:center;" onclick="presetTimer(150)">150分</button>
+    </div>
+
+    <!-- 微調整ボタン -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:12px;">
+        <button class="btn-sm btn-sub" style="padding:6px 0; justify-content:center;" onclick="adjustTimer(10)">＋10分 延長</button>
+        <button class="btn-sm btn-sub" style="padding:6px 0; justify-content:center;" onclick="adjustTimer(-10)">ー10分 短縮</button>
+    </div>
+
+    <!-- コントロールボタン -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+        <button id="timer-toggle-btn" class="btn-block btn-primary" style="margin:0; min-height:46px; justify-content:center; font-size:14px;" onclick="toggleTimer()">▶ スタート</button>
+        <button class="btn-block btn-sub" style="margin:0; min-height:46px; justify-content:center; font-size:14px;" onclick="resetTimer()">⏹ リセット</button>
+    </div>
+</div>
+
+<!-- 💸 傾斜割り勘計算 ＆ レシートOCR -->
 <div class="card">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <span style="font-size:12px; font-weight:800; color:var(--muted);">💸 傾斜割り勘計算</span>
@@ -1023,25 +1172,7 @@ TOOLS_CONTENT = """
     </div>
 </div>
 
-<!-- 幹事用：集金チェックリスト -->
-<div class="card" style="border-color:var(--green);">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span style="font-size:12px; font-weight:800; color:var(--green);">📋 参加費・集金チェッカー</span>
-        <button class="btn-sm btn-sub" onclick="addMemberPrompt()">＋ メンバー追加</button>
-    </div>
-    <div id="member-list" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;"></div>
-    <div style="font-size:11px; font-weight:800; color:var(--muted); text-align:right;" id="collection-summary">集金済: 0 / 0 名</div>
-</div>
-
-<!-- 宴会・合コン用：席決めシャッフル -->
-<div class="card" style="border-color:var(--blue);">
-    <div style="font-size:12px; font-weight:800; color:var(--blue); margin-bottom:8px;">🔀 席替え・席決めシャッフル</div>
-    <div class="input-group"><input type="text" id="seat-names" value="幹事, Aさん, Bさん, Cさん, Dさん, Eさん" placeholder="参加者名をカンマ区切りで入力"></div>
-    <button class="btn-block btn-sub" onclick="shuffleSeats()">ランダムに席を決める！</button>
-    <div id="seat-res" style="display:none; background:var(--tag); padding:10px; border-radius:10px; margin-top:8px; font-size:12px; font-weight:800; line-height:1.6;"></div>
-</div>
-
-<!-- 終電見張りアラーム -->
+<!-- ⏰ 終電見張りアラーム -->
 <div class="card" style="border-color:var(--purple);">
     <div style="font-size:12px; font-weight:800; color:var(--purple); margin-bottom:8px;">⏰ 終電見張りアラーム</div>
     <div style="display:flex; gap:6px; align-items:center;">
@@ -1051,28 +1182,125 @@ TOOLS_CONTENT = """
     <div id="train-status" style="font-size:11px; font-weight:800; color:var(--muted); margin-top:6px;">未設定</div>
 </div>
 </div>
+
 <script>
+    window.addEventListener('DOMContentLoaded', () => {
+        const rawPreset = sessionStorage.getItem('eatmap_invite_preset');
+        if(rawPreset) {
+            try {
+                const p = JSON.parse(rawPreset);
+                if(p.shop) document.getElementById('inv-shop').value = `${p.shop} (${p.place||''})`;
+                if(p.budget) document.getElementById('inv-budget').value = p.budget;
+            } catch(e){}
+            sessionStorage.removeItem('eatmap_invite_preset');
+        }
+        updateTimerDisplay();
+    });
+
+    // --- タイマーロジック（超直感・大型表示対応） ---
+    let timerTotalSec = 5400; // 初期値90分 (5400秒)
+    let timerRemainSec = 5400;
     let timerInterval = null;
-    function startTimer(min) {
-        if(timerInterval) clearInterval(timerInterval);
-        let rem = min * 60;
-        document.getElementById('timer-status').innerText = `残り時間: ${min}分 (退席15分前に通知)`;
-        document.getElementById('timer-status').style.color = "var(--yellow)";
-        timerInterval = setInterval(() => {
-            rem--;
-            if(rem === 900) { showAppAlert("⚠️ ラストオーダー", "退席15分前です！ラストオーダーの確認をおすすめします。"); }
-            if(rem <= 0) { clearInterval(timerInterval); showAppAlert("🔔 お時間です", "コースの利用時間・お席の終了時刻になりました！"); }
-            const m = Math.floor(rem / 60), s = rem % 60;
-            document.getElementById('timer-status').innerText = `残り時間: ${m}分 ${s}秒`;
-        }, 1000);
-        showAppAlert("セット完了", `${min}分タイマーを開始しました。`);
-    }
-    function cancelTimer() {
-        if(timerInterval) clearInterval(timerInterval);
-        document.getElementById('timer-status').innerText = "未稼働";
-        document.getElementById('timer-status').style.color = "var(--muted)";
+    let isTimerRunning = false;
+
+    function formatTime(s) {
+        const m = Math.floor(s / 60);
+        const sec = s % 60;
+        return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
     }
 
+    function updateTimerDisplay() {
+        document.getElementById('big-timer-display').innerText = formatTime(timerRemainSec);
+    }
+
+    function presetTimer(min) {
+        resetTimer();
+        timerTotalSec = min * 60;
+        timerRemainSec = timerTotalSec;
+        updateTimerDisplay();
+        document.getElementById('timer-status-badge').innerText = `【${min}分コース】にセットしました`;
+        document.getElementById('timer-status-badge').style.color = "var(--yellow)";
+    }
+
+    function adjustTimer(min) {
+        if(isTimerRunning) return showAppAlert("ご案内", "時間を調整する際は一時停止してください。");
+        timerRemainSec = Math.max(60, timerRemainSec + min * 60);
+        timerTotalSec = timerRemainSec;
+        updateTimerDisplay();
+    }
+
+    function toggleTimer() {
+        doVibrate(30);
+        const btn = document.getElementById('timer-toggle-btn');
+        if(isTimerRunning) {
+            clearInterval(timerInterval);
+            isTimerRunning = false;
+            btn.innerText = "▶ 再開";
+            btn.className = "btn-block btn-primary";
+            document.getElementById('timer-status-badge').innerText = "一時停止中";
+        } else {
+            isTimerRunning = true;
+            btn.innerText = "⏸ 一時停止";
+            btn.className = "btn-block btn-yellow";
+            document.getElementById('timer-status-badge').innerText = "カウントダウン中 (15分前通知)";
+            document.getElementById('timer-status-badge').style.color = "var(--green)";
+            
+            timerInterval = setInterval(() => {
+                if(timerRemainSec > 0) {
+                    timerRemainSec--;
+                    updateTimerDisplay();
+                    if(timerRemainSec === 900) {
+                        showAppAlert("⚠️ ラストオーダー", "退席15分前です！ラストオーダーの確認をおすすめします。");
+                    }
+                } else {
+                    clearInterval(timerInterval);
+                    isTimerRunning = false;
+                    btn.innerText = "▶ スタート";
+                    btn.className = "btn-block btn-primary";
+                    document.getElementById('timer-status-badge').innerText = "コース終了！お時間です";
+                    showAppAlert("🔔 お時間です", "コース・お席の終了時刻になりました！");
+                }
+            }, 1000);
+        }
+    }
+
+    function resetTimer() {
+        if(timerInterval) clearInterval(timerInterval);
+        isTimerRunning = false;
+        timerRemainSec = timerTotalSec;
+        updateTimerDisplay();
+        const btn = document.getElementById('timer-toggle-btn');
+        btn.innerText = "▶ スタート";
+        btn.className = "btn-block btn-primary";
+        document.getElementById('timer-status-badge').innerText = "タイマー停止中";
+        document.getElementById('timer-status-badge').style.color = "var(--muted)";
+    }
+
+    // --- 案内状ロジック ---
+    function makeInviteBody() {
+        const title = document.getElementById('inv-title').value.trim() || '飲み会のご案内';
+        const date = document.getElementById('inv-date').value.trim() || '調整中';
+        const shop = document.getElementById('inv-shop').value.trim() || '未定';
+        const budget = document.getElementById('inv-budget').value.trim() || '未定';
+        const memo = document.getElementById('inv-memo').value.trim();
+        return `【${title}】\\n\\n■ 日時: ${date}\\n■ お店・場所: ${shop}\\n■ 目安会費: ${budget}${memo ? '\\n■ 備考: ' + memo : ''}\\n\\n出欠の連絡をお願いします！🍺`;
+    }
+
+    function generateAndSendLineInvite() {
+        const text = makeInviteBody();
+        shareToLine(text);
+    }
+
+    function copyInviteText() {
+        const text = makeInviteBody();
+        navigator.clipboard.writeText(text).then(()=>{
+            showAppAlert("コピー完了！", "ご案内文をクリップボードにコピーしました。LINEに貼り付けて送ってください！");
+        }).catch(()=>{
+            showAppAlert("完了", text);
+        });
+    }
+
+    // --- 割り勘・終電・レシートOCR ---
     let lastSplitData = null;
     function calcSplit() { 
         const tot = parseInt(document.getElementById('split-total').value)||0, dr = parseInt(document.getElementById('split-drinkers').value)||0, ndr = parseInt(document.getElementById('split-nondrinkers').value)||0, disc = parseInt(document.getElementById('split-discount').value)||0; 
@@ -1088,61 +1316,6 @@ TOOLS_CONTENT = """
         if(!lastSplitData) return;
         const text = `【お会計・割り勘計算】\\n合計: ¥${lastSplitData.total.toLocaleString()}\\n🍺 飲む人 (${lastSplitData.drCount}名): 各 ¥${lastSplitData.drinker.toLocaleString()}\\n🍵 飲まない人 (${lastSplitData.ndrCount}名): 各 ¥${lastSplitData.nonDrinker.toLocaleString()}\\nよろしくお願いします！✨`;
         shareToLine(text);
-    }
-
-    // 集金チェッカー
-    let members = JSON.parse(localStorage.getItem('eatmap_members') || '["参加者A", "参加者B", "参加者C"]');
-    let paidStatus = JSON.parse(localStorage.getItem('eatmap_paid') || '{}');
-
-    function renderMembers() {
-        const box = document.getElementById('member-list');
-        box.innerHTML = members.map((m, i) => `
-            <div style="display:flex; justify-content:space-between; align-items:center; background:var(--tag); padding:6px 10px; border-radius:8px;">
-                <span style="font-size:12px; font-weight:800;">${m}</span>
-                <div style="display:flex; gap:6px;">
-                    <button class="btn-sm ${paidStatus[m] ? 'btn-green':'btn-sub'}" style="padding:4px 8px; font-size:10px; border:none;" onclick="togglePaid('${m}')">${paidStatus[m] ? '✓ 支払済':'未払'}</button>
-                    <button class="btn-icon" style="width:20px; height:20px; font-size:10px; border:none;" onclick="delMember(${i})">✕</button>
-                </div>
-            </div>
-        `).join('');
-        const paidCount = members.filter(m => paidStatus[m]).length;
-        document.getElementById('collection-summary').innerText = `集金済: ${paidCount} / ${members.length} 名`;
-    }
-
-    function togglePaid(m) {
-        paidStatus[m] = !paidStatus[m];
-        localStorage.setItem('eatmap_paid', JSON.stringify(paidStatus));
-        renderMembers();
-    }
-
-    function addMemberPrompt() {
-        const name = prompt("追加する参加者の名前を入力してください:");
-        if(name && name.trim()) {
-            members.push(name.trim());
-            localStorage.setItem('eatmap_members', JSON.stringify(members));
-            renderMembers();
-        }
-    }
-
-    function delMember(idx) {
-        members.splice(idx, 1);
-        localStorage.setItem('eatmap_members', JSON.stringify(members));
-        renderMembers();
-    }
-
-    // 席替えシャッフル
-    function shuffleSeats() {
-        doVibrate(30);
-        const raw = document.getElementById('seat-names').value;
-        const arr = raw.split(',').map(s=>s.trim()).filter(Boolean);
-        if(arr.length < 2) return showAppAlert("エラー", "2名以上の名前を入力してください");
-        for(let i = arr.length - 1; i > 0; i--){
-            const j = Math.floor(Math.random() * (i + 1));
-            [arr[i], arr[j]] = [arr[j], arr[i]];
-        }
-        const resBox = document.getElementById('seat-res');
-        resBox.innerHTML = arr.map((name, i) => `<b>席番 ${i+1}:</b> ${name}`).join('<br>');
-        resBox.style.display = 'block';
     }
 
     function setTrainAlarm(){ 
@@ -1183,8 +1356,6 @@ TOOLS_CONTENT = """
         };
         reader.readAsDataURL(file);
     }
-
-    window.addEventListener('DOMContentLoaded', renderMembers);
 </script>
 """
 
@@ -1278,7 +1449,7 @@ def search():
     content = render_template_string(RESULT_CONTENT, shops=shops, search_title=title, recipes=recipes)
     return render_page(content)
 
-# レシートOCR解析API
+# レシートOCR解析API (Cloud Vision API)
 @app.route('/api/ocr', methods=['POST'])
 def api_ocr():
     req_json = request.get_json(silent=True) or {}
@@ -1306,7 +1477,7 @@ def api_ocr():
     except Exception: pass
     return jsonify({"amount": None})
 
-# AI相談API
+# AI相談API (Groq / Gemini)
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     req_json = request.get_json(silent=True) or {}
